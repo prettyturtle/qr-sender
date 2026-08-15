@@ -22,7 +22,9 @@ export default defineConfig({
         // requests, once, at add-to-home-screen time — and iOS holds its own copy
         // from then on. Precaching them would put that on every user, Android
         // included, for no offline benefit.
-        globIgnores: ['**/pdf*.{js,mjs}', 'splash/**'],
+        // og.png is fetched by link-preview crawlers and never by the app, so
+        // precaching it would put 40KB on every user for nothing.
+        globIgnores: ['**/pdf*.{js,mjs}', 'splash/**', 'og.png'],
         runtimeCaching: [
           {
             urlPattern: /\/assets\/pdf.*\.(?:js|mjs)$/,
