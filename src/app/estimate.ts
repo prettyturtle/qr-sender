@@ -8,10 +8,13 @@
  * than presenting "18-36".
  */
 
-import { DEFAULT_K, MANIFEST_INTERVAL, SOFT_MAX_BYTES, type QrProfile } from '../core/params.js';
+import { DEFAULT_K, DEFAULT_PLAYBACK_FPS, MANIFEST_INTERVAL, SOFT_MAX_BYTES, type QrProfile } from '../core/params.js';
 
 /** Manifest frames are interleaved, so useful frames are slightly fewer than displayed frames. */
 export const MANIFEST_TAX = (MANIFEST_INTERVAL + 1) / MANIFEST_INTERVAL;
+
+/** Fraction of displayed frames that carry payload. */
+export const DATA_FRAME_RATIO = MANIFEST_INTERVAL / (MANIFEST_INTERVAL + 1);
 
 export interface ReceiverProfile {
   id: 'android' | 'desktop' | 'ios';
@@ -42,6 +45,7 @@ export function estimateTransfer(
   payloadBytes: number,
   profile: QrProfile,
   k: number = DEFAULT_K,
+  playbackFps: number = DEFAULT_PLAYBACK_FPS,
 ): TransferEstimate {
   const segmentBytes = k * profile.blockSize;
   const segCount = Math.max(1, Math.ceil(payloadBytes / segmentBytes));
@@ -49,7 +53,9 @@ export function estimateTransfer(
 
   const seconds = {} as Record<ReceiverProfile['id'], number>;
   for (const r of RECEIVER_PROFILES) {
-    seconds[r.id] = (symbols * MANIFEST_TAX) / r.decodeFps;
+    // A receiver cannot collect distinct symbols faster than they are displayed,
+    // so the playback rate is a ceiling on even the quickest decoder.
+    seconds[r.id] = symbols / (Math.min(r.decodeFps, playbackFps) * DATA_FRAME_RATIO);
   }
 
   const values = RECEIVER_PROFILES.map((r) => seconds[r.id]);
@@ -75,24 +81,4 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-export function formatDuration(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '—';
-  const s = Math.round(seconds);
-  if (s < 60) return `${s}초`;
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m}분`;
-  const h = Math.floor(m / 60);
-  const rem = m % 60;
-  return rem === 0 ? `${h}시간` : `${h}시간 ${rem}분`;
-}
 
-export function formatDurationEn(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '—';
-  const s = Math.round(seconds);
-  if (s < 60) return `${s}s`;
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m} min`;
-  const h = Math.floor(m / 60);
-  const rem = m % 60;
-  return rem === 0 ? `${h} hr` : `${h} hr ${rem} min`;
-}

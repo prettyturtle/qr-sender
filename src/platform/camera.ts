@@ -160,7 +160,7 @@ export class Scanner {
     if (detector === null) return;
 
     try {
-      const texts = await detector.detect(this.opts.video, () => this.grab());
+      const texts = await detector.detect(this.drawCrop(), () => this.readBack());
       this.attempts++;
       if (texts.length > 0) {
         this.decodes++;
@@ -200,7 +200,7 @@ export class Scanner {
   }
 
   /** Centre square of the viewfinder, downscaled — the detector never sees more than it needs. */
-  private grab(): ImageData {
+  private drawCrop(): HTMLCanvasElement {
     const video = this.opts.video;
     const target = this.targetRoi();
     const side = Math.min(video.videoWidth, video.videoHeight);
@@ -210,8 +210,7 @@ export class Scanner {
       this.work.width = out;
       this.work.height = out;
     }
-    const ctx = this.ctx!;
-    ctx.drawImage(
+    this.ctx!.drawImage(
       video,
       (video.videoWidth - side) / 2,
       (video.videoHeight - side) / 2,
@@ -222,7 +221,12 @@ export class Scanner {
       out,
       out,
     );
-    return ctx.getImageData(0, 0, out, out);
+    return this.work;
+  }
+
+  /** Only the wasm backend needs the pixels; the native one reads the canvas directly. */
+  private readBack(): ImageData {
+    return this.ctx!.getImageData(0, 0, this.work.width, this.work.height);
   }
 
   stop(): void {

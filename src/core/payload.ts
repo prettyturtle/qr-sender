@@ -8,7 +8,7 @@
 
 import { unwrapEnvelope, wrapEnvelope, type Envelope } from './envelope.js';
 import { segmentCountFor } from './emitter.js';
-import type { Manifest } from './manifest.js';
+import { fitManifest, type Manifest } from './manifest.js';
 import { chooseK, MAX_RECEIVE_BYTES, MIN_COMPRESSION_GAIN, PBKDF2_ITERATIONS } from './params.js';
 import { sha256Hex } from './sha256.js';
 
@@ -160,7 +160,7 @@ export async function buildPayload(opts: BuildPayloadOptions): Promise<BuiltPayl
     ...(encrypted ? { kdf, iv } : { name: opts.name, mime: opts.mime, plainSize: opts.data.length }),
   };
 
-  return { payload: body, manifest, streamId };
+  return { payload: body, manifest: fitManifest(manifest, opts.blockSize), streamId };
 }
 
 export class WrongPassphraseError extends Error {

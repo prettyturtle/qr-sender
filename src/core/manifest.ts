@@ -39,11 +39,48 @@ const enc = new TextEncoder();
 const dec = new TextDecoder();
 
 /**
- * Smallest block size that can always carry a manifest. Encrypted manifests are
- * the largest (base64 salt + IV) at roughly 300 bytes; the real profile carries
- * 1211, so this only ever binds in tests or on an exotic QR downshift.
+ * Smallest block size that can carry a manifest with no filename attached.
+ * Encrypted manifests are the largest of those (base64 salt and IV) at roughly
+ * 240 bytes; `fitManifest` trims the optional display fields to whatever is left
+ * over on small profiles.
  */
-export const MIN_BLOCK_SIZE_FOR_MANIFEST = 512;
+export const MIN_BLOCK_SIZE_FOR_MANIFEST = 320;
+
+/**
+ * Trim the optional display fields until the manifest fits the block.
+ *
+ * Name and MIME are duplicated here purely so a receiver can label the transfer
+ * before it completes — the authoritative copy travels inside the envelope,
+ * where it is also covered by encryption. Dropping them costs a label, whereas
+ * overflowing the block would fail the transfer outright, which is the wrong
+ * trade on a small QR profile with a long filename.
+ */
+export function fitManifest(manifest: Manifest, blockSize: number): Manifest {
+  const fits = (m: Manifest): boolean => encodeManifestPrefixed(m).length <= blockSize;
+  if (fits(manifest)) return manifest;
+
+  let m: Manifest = { ...manifest };
+  if (m.plainSize !== undefined) {
+    delete m.plainSize;
+    if (fits(m)) return m;
+  }
+  if (m.name !== undefined) {
+    const overflow = encodeManifestPrefixed(m).length - blockSize;
+    const keep = Math.max(0, [...m.name].length - overflow - 1);
+    m = { ...m, name: keep > 0 ? [...m.name].slice(0, keep).join('') + '…' : undefined };
+    if (m.name === undefined) delete m.name;
+    if (fits(m)) return m;
+  }
+  if (m.mime !== undefined) {
+    delete m.mime;
+    if (fits(m)) return m;
+  }
+  if (m.name !== undefined) {
+    delete m.name;
+    if (fits(m)) return m;
+  }
+  throw new Error(`manifest cannot fit blockSize ${blockSize}`);
+}
 
 /** `[u16 length][json]`, unpadded — the form a single-frame transfer embeds. */
 export function encodeManifestPrefixed(manifest: Manifest): Uint8Array {

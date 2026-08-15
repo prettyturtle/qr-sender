@@ -17,10 +17,18 @@ export type DetectorKind = 'barcode-detector' | 'zxing-wasm';
 export interface FrameDetector {
   readonly kind: DetectorKind;
   /**
-   * @param video live element, used directly by backends that accept it
-   * @param grab  lazily produces an ImageData readback for backends that need one
+   * Both backends are handed the same cropped, downscaled region.
+   *
+   * `BarcodeDetector` accepts the `<video>` element directly, and passing it
+   * avoids a pixel readback — but it then has to locate a symbol across the full
+   * 1920x1080 frame, and that search dominates its latency. Feeding it the same
+   * centre crop the wasm decoder gets trades a few milliseconds of readback for
+   * a much smaller search area.
+   *
+   * @param canvas cropped region, already drawn
+   * @param pixels lazily reads it back for backends that cannot take a canvas
    */
-  detect(video: HTMLVideoElement, grab: () => ImageData): Promise<string[]>;
+  detect(canvas: HTMLCanvasElement, pixels: () => ImageData): Promise<string[]>;
   close(): void;
 }
 
@@ -53,9 +61,8 @@ function createNativeDetector(): FrameDetector {
   const impl = new ctor({ formats: ['qr_code'] });
   return {
     kind: 'barcode-detector',
-    async detect(video) {
-      // Passing the video element skips the readback entirely.
-      const found = await impl.detect(video);
+    async detect(canvas) {
+      const found = await impl.detect(canvas);
       return found.map((f) => f.rawValue);
     },
     close() {},
@@ -75,8 +82,8 @@ async function createZxingDetector(): Promise<FrameDetector> {
 
   return {
     kind: 'zxing-wasm',
-    async detect(_video, grab) {
-      const results = await readBarcodes(grab(), {
+    async detect(_canvas, pixels) {
+      const results = await readBarcodes(pixels(), {
         formats: ['QRCode'],
         tryHarder: false,
         tryRotate: false,

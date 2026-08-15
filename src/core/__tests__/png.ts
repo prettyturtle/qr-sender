@@ -75,3 +75,57 @@ export function rasteriseQr(modules: Uint8Array, size: number, scale: number, qu
   }
   return { png: encodeGrayPng(pixels, side, side), side };
 }
+
+/**
+ * Rasterise with rounded module corners, matching what the browser renderer
+ * draws. Only corners with no dark neighbour are rounded, so adjacent modules
+ * stay fused — the shape a decoder still samples correctly at its centre.
+ */
+export function rasteriseQrRounded(
+  modules: Uint8Array,
+  size: number,
+  scale: number,
+  radiusFrac = 0.3,
+  quiet = 4,
+  darkLevel = 0x00,
+): QrRaster {
+  const side = (size + quiet * 2) * scale;
+  const pixels = new Uint8Array(side * side).fill(0xff);
+  const r = scale * radiusFrac;
+  const dark = (x: number, y: number): boolean =>
+    x >= 0 && y >= 0 && x < size && y < size && modules[y * size + x] !== 0;
+
+  for (let my = 0; my < size; my++) {
+    for (let mx = 0; mx < size; mx++) {
+      if (!dark(mx, my)) continue;
+      const up = dark(mx, my - 1);
+      const down = dark(mx, my + 1);
+      const left = dark(mx - 1, my);
+      const right = dark(mx + 1, my);
+      const x0 = (quiet + mx) * scale;
+      const y0 = (quiet + my) * scale;
+
+      for (let dy = 0; dy < scale; dy++) {
+        for (let dx = 0; dx < scale; dx++) {
+          const lx = dx + 0.5;
+          const ly = dy + 0.5;
+          let inside = true;
+          const corners: Array<[boolean, number, number]> = [
+            [!up && !left, r, r],
+            [!up && !right, scale - r, r],
+            [!down && !right, scale - r, scale - r],
+            [!down && !left, r, scale - r],
+          ];
+          for (const [active, cx, cy] of corners) {
+            if (!active) continue;
+            const outsideX = (cx < scale / 2 && lx < cx) || (cx > scale / 2 && lx > cx);
+            const outsideY = (cy < scale / 2 && ly < cy) || (cy > scale / 2 && ly > cy);
+            if (outsideX && outsideY && Math.hypot(lx - cx, ly - cy) > r) inside = false;
+          }
+          if (inside) pixels[(y0 + dy) * side + x0 + dx] = darkLevel;
+        }
+      }
+    }
+  }
+  return { png: encodeGrayPng(pixels, side, side), side };
+}
