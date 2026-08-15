@@ -510,30 +510,50 @@ export function ReceiveView(): JSX.Element {
 
     return (
       <>
+        {/*
+          The camera area carries only what helps the user aim. Progress numbers
+          used to live here too, and an empty progress track cut a dark band
+          across the viewfinder before any signal arrived — telemetry occluding
+          the thing it is measuring.
+        */}
         <div className="viewfinder">
           <video ref={videoRef} playsInline muted />
           <div className="reticle" />
           <div className="overlay">
-            {fileName !== null && <strong>{fileName}</strong>}
+            <span className={coach.badgeClass}>{t(coach.qualityKey)}</span>
+            <span aria-live="polite">{t(coach.coachKey)}</span>
+          </div>
+        </div>
+
+        {hasSignal && (
+          <section className="card tight">
+            {fileName !== null && <p className="card-title">{fileName}</p>}
             <div className="progress">
               <div style={{ width: `${percent}%` }} />
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' }}>
-              <span className={coach.badgeClass}>{t(coach.qualityKey)}</span>
-              {hasSignal && (
-                <span style={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {t('recv.progress', { done: progress.received, total: progress.needed })}
-                </span>
-              )}
-            </div>
-            {hasSignal && (
-              <div style={{ fontVariantNumeric: 'tabular-nums' }}>
-                {t('recv.rate')} {decodeFps.toFixed(1)} fps · {t('recv.eta', { t: formatSeconds(etaSeconds) })}
+            <dl className="stats" style={{ marginTop: 12 }}>
+              <div className="stat">
+                <dt>{t('recv.percent')}</dt>
+                <dd>{percent}%</dd>
               </div>
-            )}
-            <div aria-live="polite">{t(coach.coachKey)}</div>
-          </div>
-        </div>
+              <div className="stat">
+                <dt>{t('recv.blocks')}</dt>
+                <dd>
+                  {progress.received}
+                  <span style={{ color: 'var(--text-faint)', fontWeight: 400 }}> / {progress.needed}</span>
+                </dd>
+              </div>
+              <div className="stat">
+                <dt>{t('recv.rate')}</dt>
+                <dd>{decodeFps.toFixed(1)} fps</dd>
+              </div>
+              <div className="stat">
+                <dt>{t('recv.remaining')}</dt>
+                <dd>{formatSeconds(etaSeconds)}</dd>
+              </div>
+            </dl>
+          </section>
+        )}
 
         {tooLarge && <p className="notice danger">{t('recv.tooLarge')}</p>}
 

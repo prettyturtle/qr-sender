@@ -458,13 +458,30 @@ select:focus-visible,
 .viewfinder .overlay {
   position: absolute;
   inset: auto 0 0 0;
-  padding: 12px;
-  background: linear-gradient(transparent, rgb(0 0 0 / 72%));
+  padding: 26px 12px 10px;
+  background: linear-gradient(transparent, rgb(0 0 0 / 78%));
   color: #fff;
   font-size: 13px;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* The badge sits on a photograph, so it needs its own contrast rather than the
+   surface colour it inherits elsewhere. */
+.viewfinder .overlay .badge {
+  background: rgb(255 255 255 / 16%);
+  color: #fff;
+  flex: none;
+}
+
+.viewfinder .overlay .badge.ok {
+  color: #7ef0a8;
+}
+
+.viewfinder .overlay .badge.warn {
+  color: #ffd479;
 }
 
 .preview-box {
