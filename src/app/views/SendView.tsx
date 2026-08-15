@@ -32,6 +32,7 @@ import { encode as base44Encode } from '../../core/base44.js';
 import { drawQr, moduleScale, symbolSide } from '../../platform/qrRender.js';
 import { createFramePainter, type FramePainter } from '../../platform/renderPool.js';
 import { acquireWakeLock, type WakeLockHandle } from '../../platform/wakeLock.js';
+import { adviseRates, measureRefreshHz, type RateAdvice } from '../../platform/displayRate.js';
 import { estimateTransfer, formatBytes } from '../estimate.js';
 import { formatDuration, useT, type MessageKey } from '../i18n.js';
 import { useAppStore, type PlaybackFps, type QrStyle } from '../store.js';
@@ -87,6 +88,8 @@ export function SendView(): JSX.Element {
   const locale = useAppStore((s) => s.locale);
   const fps = useAppStore((s) => s.playbackFps);
   const setPlaybackFps = useAppStore((s) => s.setPlaybackFps);
+  const pickPlaybackFps = useAppStore((s) => s.pickPlaybackFps);
+  const fpsPicked = useAppStore((s) => s.fpsPicked);
   const qrStyle = useAppStore((s) => s.qrStyle);
   const setQrStyle = useAppStore((s) => s.setQrStyle);
   const qrColor = useAppStore((s) => s.qrColor);
@@ -107,6 +110,9 @@ export function SendView(): JSX.Element {
   const [fullscreen, setFullscreen] = useState(false);
   const repaintStaticRef = useRef<(() => void) | null>(null);
   const fullscreenRef = useRef(false);
+  const refreshPeriodRef = useRef(1000 / 60);
+  const [advice, setAdvice] = useState<RateAdvice | null>(null);
+  const [actualFps, setActualFps] = useState(0);
   const [wakeLockSupported, setWakeLockSupported] = useState(true);
   const [stats, setStats] = useState({ frames: 0, passes: 0 });
   const [stageArea, setStageArea] = useState(() => stageAreaEstimate(false));
@@ -123,6 +129,27 @@ export function SendView(): JSX.Element {
       ),
     [stageArea, custom],
   );
+
+  // Measure the panel once, then let the result drive both the options list and
+  // — until the user picks a rate themselves — the selected rate.
+  useEffect(() => {
+    let alive = true;
+    void measureRefreshHz().then((hz) => {
+      if (!alive) return;
+      refreshPeriodRef.current = 1000 / hz;
+      const next = adviseRates(hz, PLAYBACK_FPS_OPTIONS);
+      setAdvice(next);
+      if (!fpsPicked || !next.options.includes(fps)) {
+        setPlaybackFps(next.recommended as PlaybackFps);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+    // Runs once: the panel does not change under us, and re-probing would fight
+    // the user's own selection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const onResize = (): void => setStageArea(stageAreaEstimate(fullscreenRef.current));
@@ -261,6 +288,8 @@ export function SendView(): JSX.Element {
     const interval = 1000 / fps;
     let raf = 0;
     let last = -1;
+    let painted = 0;
+    let windowStart = -1;
 
     const tick = (now: number): void => {
       raf = requestAnimationFrame(tick);
@@ -270,13 +299,29 @@ export function SendView(): JSX.Element {
         return;
       }
       const elapsed = now - last;
-      if (elapsed < interval) return;
+      // Half a refresh period of slack. rAF fires on the vsync boundary, so at
+      // 60fps on a 60Hz panel `elapsed` lands a hair either side of `interval`
+      // — and a strict comparison drops every frame that lands below, halving
+      // the rate the user asked for while the UI still claims 60. The receiver
+      // tolerates an early frame (it sees a duplicate); it cannot recover one
+      // that was never drawn.
+      if (elapsed < interval - refreshPeriodRef.current / 2) return;
       // Fixed timestep: advance by exactly one period so rAF jitter does not
       // accumulate into drift. If we fell far behind — backgrounded tab, GC
       // pause — resync rather than burning through a catch-up burst the camera
       // could never resolve.
       last = elapsed > interval * 3 ? now : last + interval;
       paint();
+      // Achieved rate, measured rather than assumed: the selector states an
+      // intent, and on a device that cannot paint a V40 symbol in time the two
+      // diverge. Showing it is what makes a wrong choice visible.
+      painted++;
+      if (windowStart < 0) windowStart = now;
+      else if (now - windowStart >= 1000) {
+        setActualFps(Math.round((painted * 1000) / (now - windowStart)));
+        painted = 0;
+        windowStart = now;
+      }
     };
 
     // rAF is throttled to a stop while hidden; restarting from a stale timestamp
@@ -515,6 +560,7 @@ export function SendView(): JSX.Element {
 
               <p style={STAGE_TEXT} aria-live="polite">
                 {t('send.loops', { n: stats.passes + 1 })}
+                {actualFps > 0 && ` · ${t('send.actualFps', { n: actualFps })}`}
               </p>
             </>
           )}
@@ -695,15 +741,21 @@ export function SendView(): JSX.Element {
           <select
             id="send-fps"
             value={fps}
-            onChange={(event) => setPlaybackFps(Number(event.target.value) as PlaybackFps)}
+            onChange={(event) => pickPlaybackFps(Number(event.target.value) as PlaybackFps)}
           >
-            {PLAYBACK_FPS_OPTIONS.map((option) => (
+            {(advice?.options ?? PLAYBACK_FPS_OPTIONS).map((option) => (
               <option key={option} value={option}>
-                {`${option} fps · ${t(`send.fps${option}` as MessageKey)}`}
+                {`${option} fps · ${t(`send.fps${option}` as MessageKey)}` +
+                  (advice !== null && option === advice.recommended
+                    ? ` (${t('send.fpsRecommended')})`
+                    : '')}
               </option>
             ))}
           </select>
-          {fps === 30 && <span className="mono">{t('send.fps30Note')}</span>}
+          {advice !== null && (
+            <span className="mono">{t('send.displayHz', { n: advice.refreshHz })}</span>
+          )}
+          {fps >= 30 && <span className="mono">{t('send.fps30Note')}</span>}
         </div>
 
         <div className="field" style={{ marginTop: 14 }}>

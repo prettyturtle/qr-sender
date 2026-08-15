@@ -15,6 +15,17 @@ interface AppState {
   playbackFps: PlaybackFps;
   setPlaybackFps: (fps: PlaybackFps) => void;
 
+  /**
+   * Whether the rate above was chosen by the user rather than measured.
+   *
+   * Until it is, the device probe is free to raise it to whatever the display
+   * can actually sustain — the fastest rate is the right default and only the
+   * device knows what that is. Once the user picks a rate, the probe stops
+   * overriding it, including across reloads.
+   */
+  fpsPicked: boolean;
+  pickPlaybackFps: (fps: PlaybackFps) => void;
+
   /** null = auto-select the best available backend. */
   detectorPreference: DetectorKind | null;
   setDetectorPreference: (kind: DetectorKind | null) => void;
@@ -41,6 +52,9 @@ export const useAppStore = create<AppState>()(
       playbackFps: DEFAULT_PLAYBACK_FPS,
       setPlaybackFps: (playbackFps) => set({ playbackFps }),
 
+      fpsPicked: false,
+      pickPlaybackFps: (playbackFps) => set({ playbackFps, fpsPicked: true }),
+
       detectorPreference: null,
       setDetectorPreference: (detectorPreference) => set({ detectorPreference }),
 
@@ -52,7 +66,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'qr-sender-settings',
-      version: 4,
+      version: 5,
       // Without this, a bumped version discards nothing but also migrates
       // nothing, and new fields silently arrive undefined for returning users.
       migrate: (persisted) => persisted as never,
