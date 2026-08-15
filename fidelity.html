@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- The privacy claim is "nothing leaves this browser". Enforce it in the
+         browser rather than relying on the absence of a fetch call: no origin
+         but this one is reachable, so a future dependency cannot quietly add
+         one. wasm-unsafe-eval is required by the zxing decoder. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; frame-src blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>QR Sender — decoder fidelity check</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/fidelity/main.ts"></script>
+  </body>
+</html>

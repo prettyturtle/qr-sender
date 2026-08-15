@@ -1,0 +1,14 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# Security headers live in `public/_headers`, which Vite copies to `dist/_headers`
+# verbatim — keeping them next to the app rather than split across two configs.
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

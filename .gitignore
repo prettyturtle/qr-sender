@@ -1,0 +1,15 @@
+node_modules/
+dist/
+dist-ssr/
+*.local
+.DS_Store
+.vite/
+coverage/
+*.tsbuildinfo
+
+# Local agent-harness state. The design spec is kept — it documents why the
+# protocol looks the way it does — but telemetry, locks and scratch notes are not
+# part of the project.
+.hako/*
+!.hako/specs/
+.netlify/
