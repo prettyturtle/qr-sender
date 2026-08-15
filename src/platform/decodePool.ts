@@ -26,8 +26,11 @@ export interface DecodePool {
   readonly inFlight: number;
   /** Rolling mean of decoder latency in milliseconds. */
   readonly latencyMs: number;
-  /** Rejects nothing: resolves to the texts found, or an empty array. */
-  decode(bitmap: ImageBitmap, roi: number): Promise<string[]>;
+  /**
+   * Resolves to the texts found, or an empty array — never rejects. The bitmap
+   * arrives already cropped and sized; no backend rescales it.
+   */
+  decode(bitmap: ImageBitmap): Promise<string[]>;
   close(): void;
 }
 
@@ -108,7 +111,7 @@ class WorkerPool implements DecodePool {
     return this.latency.value;
   }
 
-  decode(bitmap: ImageBitmap, roi: number): Promise<string[]> {
+  decode(bitmap: ImageBitmap): Promise<string[]> {
     const worker = this.idle.pop();
     if (worker === undefined) {
       bitmap.close();
@@ -117,7 +120,7 @@ class WorkerPool implements DecodePool {
     const id = this.nextId++;
     this.busy++;
     this.owner.set(id, worker);
-    const request: DecodeRequest = { id, bitmap, roi };
+    const request: DecodeRequest = { id, bitmap };
     return new Promise<string[]>((resolve) => {
       this.pending.set(id, resolve);
       worker.postMessage(request, [bitmap]);
@@ -168,7 +171,7 @@ class NativePool implements DecodePool {
     return this.latency.value;
   }
 
-  async decode(bitmap: ImageBitmap, _roi: number): Promise<string[]> {
+  async decode(bitmap: ImageBitmap): Promise<string[]> {
     const detector = this.free.pop();
     if (detector === undefined || this.closed) {
       bitmap.close();

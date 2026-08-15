@@ -302,7 +302,7 @@ async function runPool(): Promise<void> {
   for (const size of sizes) {
     const pool = await createDecodePool({ size });
     // Warm up so wasm instantiation is not counted.
-    await pool.decode(await createImageBitmap(canvas), 800);
+    await pool.decode(await createImageBitmap(canvas));
 
     const start = performance.now();
     let done = 0;
@@ -314,7 +314,7 @@ async function runPool(): Promise<void> {
         continue;
       }
       const bitmap = await createImageBitmap(canvas);
-      const task = pool.decode(bitmap, 800).then((texts) => {
+      const task = pool.decode(bitmap).then((texts) => {
         if (texts[0] !== text) ok = false;
         done++;
       });

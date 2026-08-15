@@ -101,6 +101,9 @@ function supportsRoundRect(): boolean {
   return roundRectSupport;
 }
 
+/** Either canvas flavour: the sender paints on the main thread and in workers. */
+export type AnyCanvasContext = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+
 interface RoundedContext {
   scale: number;
   off: number;
@@ -130,7 +133,7 @@ function finderOrigins(size: number): Array<[number, number]> {
  * circular pupil preserve those proportions exactly on the centre line; the
  * corners a decoder never samples are the only thing that changes.
  */
-function drawRounded(ctx: CanvasRenderingContext2D, qr: RenderedQr, c: RoundedContext): void {
+function drawRounded(ctx: AnyCanvasContext, qr: RenderedQr, c: RoundedContext): void {
   const { scale, off } = c;
   const n = qr.modules;
   const data = qr.data;
@@ -194,23 +197,31 @@ export interface DrawOptions {
  * ragged edges under camera downsampling, which measurably hurts decode rate, so
  * the symbol is snapped down and centred rather than stretched to fill.
  */
-export function drawQr(canvas: HTMLCanvasElement, qr: RenderedQr, opts: DrawOptions): void {
-  const dpr = opts.devicePixelRatio ?? (globalThis.devicePixelRatio || 1);
-  const total = qr.modules + QUIET_ZONE * 2;
-  const devicePx = Math.floor(opts.cssSize * dpr);
-  const scale = Math.max(1, Math.floor(devicePx / total));
-  const side = scale * total;
+export interface PaintOptions {
+  /** Device pixels per module; must be an integer or edges alias under a camera. */
+  scale: number;
+  dark?: string;
+  light?: string;
+  rounded?: boolean;
+}
 
-  if (canvas.width !== side || canvas.height !== side) {
-    canvas.width = side;
-    canvas.height = side;
-  }
-  canvas.style.width = `${side / dpr}px`;
-  canvas.style.height = `${side / dpr}px`;
+/** Total edge length in device pixels for a symbol drawn at `scale`. */
+export function symbolSide(modules: number, scale: number): number {
+  return scale * (modules + QUIET_ZONE * 2);
+}
 
-  const ctx = canvas.getContext('2d', { alpha: false });
-  if (ctx === null) throw new Error('2d canvas context unavailable');
+/** Largest integer module size that fits `devicePx`, never below one. */
+export function moduleScale(modules: number, devicePx: number): number {
+  return Math.max(1, Math.floor(devicePx / (modules + QUIET_ZONE * 2)));
+}
 
+/**
+ * Paint a symbol onto any 2D context. Kept separate from canvas sizing so the
+ * same code runs on the main thread and inside a render worker.
+ */
+export function paintQr(ctx: AnyCanvasContext, qr: RenderedQr, opts: PaintOptions): void {
+  const { scale } = opts;
+  const side = symbolSide(qr.modules, scale);
   const colours = safeColours(opts.dark ?? '#000000', opts.light ?? '#ffffff');
 
   ctx.fillStyle = colours.light;
@@ -243,4 +254,43 @@ export function drawQr(canvas: HTMLCanvasElement, qr: RenderedQr, opts: DrawOpti
       x += run;
     }
   }
+}
+
+/**
+ * Draw into a canvas at an integer module size. Fractional module sizes produce
+ * ragged edges under camera downsampling, which measurably hurts decode rate, so
+ * the symbol is snapped down and centred rather than stretched to fill.
+ */
+export function drawQr(canvas: HTMLCanvasElement, qr: RenderedQr, opts: DrawOptions): void {
+  const dpr = opts.devicePixelRatio ?? (globalThis.devicePixelRatio || 1);
+  const devicePx = Math.floor(opts.cssSize * dpr);
+  const scale = moduleScale(qr.modules, devicePx);
+  const side = symbolSide(qr.modules, scale);
+
+  if (canvas.width !== side || canvas.height !== side) {
+    canvas.width = side;
+    canvas.height = side;
+  }
+  canvas.style.width = `${side / dpr}px`;
+  canvas.style.height = `${side / dpr}px`;
+
+  const ctx = canvas.getContext('2d', { alpha: false });
+  if (ctx === null) throw new Error('2d canvas context unavailable');
+
+  paintQr(ctx, qr, {
+    scale,
+    ...(opts.dark !== undefined ? { dark: opts.dark } : {}),
+    ...(opts.light !== undefined ? { light: opts.light } : {}),
+    ...(opts.rounded !== undefined ? { rounded: opts.rounded } : {}),
+  });
+}
+
+/** Paint an already-sized bitmap for the caller to blit — used by the render worker. */
+export function paintToBitmap(qr: RenderedQr, opts: PaintOptions): ImageBitmap {
+  const side = symbolSide(qr.modules, opts.scale);
+  const surface = new OffscreenCanvas(side, side);
+  const ctx = surface.getContext('2d', { alpha: false });
+  if (ctx === null) throw new Error('OffscreenCanvas 2d context unavailable');
+  paintQr(ctx, qr, opts);
+  return surface.transferToImageBitmap();
 }

@@ -15,7 +15,7 @@ export const MAGIC_1 = 0x53; // 'S'
 export const HEADER_SIZE = 24;
 
 /** Declared early: the capture-rate constants below are derived from it. */
-const DEFAULT_PLAYBACK_FPS_VALUE = 15;
+const DEFAULT_PLAYBACK_FPS_VALUE = 20;
 
 export type QrEcc = 'L' | 'M' | 'Q' | 'H';
 
@@ -162,8 +162,20 @@ export function maxKForFps(playbackFps: number): number {
  */
 export const DEFAULT_K = maxKForFps(DEFAULT_PLAYBACK_FPS_VALUE);
 
-/** Consecutive symbols emitted per segment before moving on, to amortise file reads. */
-export const BURST = 8;
+/**
+ * Consecutive symbols emitted per segment before moving on.
+ *
+ * One. A burst of eight was meant to amortise reading each segment off disk,
+ * but the payload is held in memory outright — so the only thing bursting buys
+ * is up to seven symbols per segment of overshoot, because a receiver finishes
+ * mid-burst and the remainder is wasted. That waste grows as K shrinks with
+ * faster playback: at K=51 it cost about 9% of the transfer.
+ *
+ * Emitting one symbol per segment also strengthens the anti-aliasing property,
+ * since the segment order is reshuffled for every symbol index rather than
+ * every eighth.
+ */
+export const BURST = 1;
 
 /**
  * A manifest frame is emitted every Nth frame. At 40 the overhead is 2.4% and a
@@ -176,11 +188,13 @@ export const MANIFEST_INTERVAL = 40;
  * Playback rates must divide 30 and 60 so each frame is held for at least two
  * camera frames.
  *
- * 15 is the default: it is the arithmetic limit for a 30fps camera and the
- * fastest rate that still guarantees the two-frame hold. 20 and 30 only work
- * when the receiving camera actually runs at 60fps — they are offered because
- * many phones do, and the failure mode is a lower decode rate rather than a
- * corrupted transfer, but they are not safe to default to.
+ * 20 is the default. On a 60fps camera that holds each symbol for three frames,
+ * so at least two are captured cleanly even with the screen and shutter beating
+ * against each other at a fixed phase. 30 doubles throughput over 15 but leaves
+ * a single clean frame per symbol and no margin — it is offered, and it works
+ * on a good camera in good light, but a camera that quietly drops to 30fps
+ * indoors would collapse it. The failure mode is a slower transfer, never a
+ * corrupted one.
  */
 export const PLAYBACK_FPS_OPTIONS = [10, 12, 15, 20, 30] as const;
 export const DEFAULT_PLAYBACK_FPS = DEFAULT_PLAYBACK_FPS_VALUE;

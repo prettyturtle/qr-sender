@@ -86,6 +86,14 @@ interface Coaching {
   coachKey: MessageKey;
 }
 
+/**
+ * Above this ratio of decode rate to useful-symbol rate, the receiver is
+ * finishing every frame it is shown and the sender's playback rate is what caps
+ * the transfer. The channel carries no feedback, so the person holding the
+ * camera becomes it.
+ */
+const SENDER_BOUND_RATIO = 1.6;
+
 /** Fraction of this device's best observed rate that still counts as good aim. */
 const GOOD_RATIO = 0.7;
 /** No device is aiming well below this, however slow its ceiling. */
@@ -101,9 +109,20 @@ const GOOD_FLOOR_FPS = 2;
  * Comparing against the best rate seen this session self-calibrates: 4fps is
  * excellent on a device whose ceiling is 4, and mediocre on one that hits 8.
  */
-function coachingFor(hasSignal: boolean, fps: number, peakFps: number, silent: boolean): Coaching {
+function coachingFor(
+  hasSignal: boolean,
+  fps: number,
+  peakFps: number,
+  silent: boolean,
+  symbolRate: number,
+): Coaching {
   if (!hasSignal) return { badgeClass: 'badge', qualityKey: 'recv.waiting', coachKey: 'recv.aim' };
   if (silent) return { badgeClass: 'badge', qualityKey: 'recv.quality.none', coachKey: 'recv.coach.steady' };
+  // Decoding far more frames than are useful means the symbols on screen are
+  // being re-read: this device has headroom and the sender does not.
+  if (symbolRate > 1 && fps > symbolRate * SENDER_BOUND_RATIO) {
+    return { badgeClass: 'badge ok', qualityKey: 'recv.quality.good', coachKey: 'recv.coach.senderSlow' };
+  }
   if (fps >= GOOD_FLOOR_FPS && fps >= peakFps * GOOD_RATIO) {
     return { badgeClass: 'badge ok', qualityKey: 'recv.quality.good', coachKey: 'recv.coach.ok' };
   }
@@ -256,7 +275,11 @@ export function ReceiveView(): JSX.Element {
       setPeakFps((prev) => (avg > prev ? avg : prev));
 
       const hw = statsRef.current;
-      const label = hw === null ? '' : `${hw.detector === 'barcode-detector' ? 'native' : 'wasm'} ×${hw.concurrency}`;
+      const label =
+        hw === null
+          ? ''
+          : `${hw.detector === 'barcode-detector' ? 'native' : 'wasm'} ×${hw.concurrency}` +
+            (hw.cameraFps > 0 ? ` · ${hw.cameraFps}fps` : '');
       setEngine((prev) => (prev === label ? prev : label));
       setSilent(now - lastReadAtRef.current >= SILENT_MS);
 
@@ -509,7 +532,7 @@ export function ReceiveView(): JSX.Element {
 
   if (phase === 'scanning') {
     const hasSignal = progress.needed > 0;
-    const coach = coachingFor(hasSignal, decodeFps, peakFps, silent);
+    const coach = coachingFor(hasSignal, decodeFps, peakFps, silent, symbolRate);
     const remaining = Math.max(0, progress.needed - progress.received);
     // Divide by the measured useful-symbol rate, not the decode rate — a rate of
     // 0 yields Infinity, which the formatter renders as "—" rather than a lie.
@@ -555,6 +578,10 @@ export function ReceiveView(): JSX.Element {
               <div className="stat">
                 <dt>{t('recv.rate')}</dt>
                 <dd>{decodeFps.toFixed(1)} fps</dd>
+              </div>
+              <div className="stat">
+                <dt>{t('recv.useful')}</dt>
+                <dd>{symbolRate.toFixed(1)} /s</dd>
               </div>
               <div className="stat">
                 <dt>{t('common.detector')}</dt>

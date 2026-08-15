@@ -28,6 +28,8 @@ export interface ScannerStats {
   resolution: string;
   /** Edge length currently handed to the decoder. */
   roi: number;
+  /** Frame rate the camera actually settled on, which caps safe playback rates. */
+  cameraFps: number;
   /** How many decodes may run at once. */
   concurrency: number;
   /** Mean decoder latency in milliseconds. */
@@ -35,23 +37,22 @@ export interface ScannerStats {
 }
 
 /**
- * Default region handed to the decoder: a centre square crop.
+ * Region handed to the decoder: the centre square, at native resolution.
  *
- * A square crop discards the parts of a landscape frame a square symbol never
- * occupies, which both speeds up the search and keeps every pixel spent on the
- * symbol itself.
+ * This used to downscale to 800px, which was sized for V25 symbols. V40 has 185
+ * modules including the quiet zone, and a symbol filling ~70% of a 1080 frame
+ * then lands at 3.0 pixels per module — exactly the floor this project sets for
+ * itself, with no margin for imperfect framing. Raising the symbol version
+ * silently invalidated the crop constant, and the escalation below could not
+ * rescue it because partial success keeps resetting the idle timer.
+ *
+ * At native resolution the same symbol gets 5.8 px/module and stays readable
+ * down to about half the frame. Eight parallel workers absorb the extra pixels.
  */
-const ROI_FAST = 800;
+const ROI_NATIVE = 1440;
 
-/**
- * Escalated region, used when nothing is decoding.
- *
- * A webcam reading a *phone* screen is resolution-starved rather than
- * CPU-starved: a 125-module symbol on a 6cm screen is about 0.5mm per module, so
- * downscaling costs roughly a quarter of the working distance at exactly the
- * moment it is scarcest.
- */
-const ROI_HIGH = 1440;
+/** Downscaled fallback, tried only when nothing decodes — cheaper, blurrier. */
+const ROI_FAST = 960;
 
 /** How long to persist with one region size before trying the other. */
 const ROI_SWITCH_MS = 4000;
@@ -105,13 +106,14 @@ export class Scanner {
   private decodes = 0;
   private windowStart = 0;
   private lastDecodeAt = 0;
-  private highRoi = false;
+  private degraded = false;
   private stats: ScannerStats = {
     attemptFps: 0,
     decodeFps: 0,
     detector: 'zxing-wasm',
     resolution: '',
-    roi: ROI_FAST,
+    roi: ROI_NATIVE,
+    cameraFps: 0,
     concurrency: 1,
     latencyMs: 0,
   };
@@ -164,6 +166,9 @@ export class Scanner {
     const track = this.stream.getVideoTracks()[0];
     const settings = track?.getSettings();
     this.stats.resolution = settings ? `${settings.width ?? '?'}x${settings.height ?? '?'}` : '';
+    // The playback rate a sender can safely use is capped by this: each symbol
+    // has to survive at least two camera frames.
+    this.stats.cameraFps = Math.round(settings?.frameRate ?? 0);
 
     this.windowStart = performance.now();
     this.lastDecodeAt = Date.now();
@@ -200,14 +205,21 @@ export class Scanner {
     const roi = this.targetRoi();
 
     this.grabbing++;
-    void createImageBitmap(video, sx, sy, side, side)
+    // Resize here rather than in the worker: the compositor does it, and it is
+    // the only place that reaches *both* backends — the native detector takes
+    // the bitmap as-is and would otherwise search a full-resolution frame.
+    const target = Math.min(roi, side);
+    const resize: ImageBitmapOptions =
+      target < side ? { resizeWidth: target, resizeHeight: target, resizeQuality: 'medium' } : {};
+
+    void createImageBitmap(video, sx, sy, side, side, resize)
       .then(async (bitmap) => {
         this.grabbing--;
         if (this.stopped) {
           bitmap.close();
           return;
         }
-        const texts = await pool.decode(bitmap, roi);
+        const texts = await pool.decode(bitmap);
         this.attempts++;
         if (texts.length > 0) {
           this.decodes++;
@@ -230,7 +242,7 @@ export class Scanner {
     // Nothing is decoding: alternate between the two region sizes rather than
     // guessing which resource is short.
     if (Date.now() - this.lastDecodeAt >= ROI_SWITCH_MS) {
-      this.highRoi = !this.highRoi;
+      this.degraded = !this.degraded;
       this.lastDecodeAt = Date.now();
     }
 
@@ -249,7 +261,7 @@ export class Scanner {
 
   private targetRoi(): number {
     if (this.opts.roiSize !== undefined) return this.opts.roiSize;
-    return this.highRoi ? ROI_HIGH : ROI_FAST;
+    return this.degraded ? ROI_FAST : ROI_NATIVE;
   }
 
   stop(): void {

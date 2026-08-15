@@ -29,7 +29,8 @@ import { buildPayload } from '../../core/payload.js';
 import { resolveMime } from '../../core/mime.js';
 import { Emitter } from '../../core/emitter.js';
 import { encode as base44Encode } from '../../core/base44.js';
-import { buildQr, drawQr, type RenderedQr } from '../../platform/qrRender.js';
+import { drawQr, moduleScale, symbolSide } from '../../platform/qrRender.js';
+import { createFramePainter, type FramePainter } from '../../platform/renderPool.js';
 import { acquireWakeLock, type WakeLockHandle } from '../../platform/wakeLock.js';
 import { estimateTransfer, formatBytes } from '../estimate.js';
 import { formatDuration, useT } from '../i18n.js';
@@ -129,6 +130,7 @@ export function SendView(): JSX.Element {
   const sideCanvasRef = useRef<HTMLCanvasElement | null>(null);
   /** Read by the rAF loop so a resize never restarts playback. */
   const stageSizeRef = useRef(MIN_STAGE_CSS_SIZE);
+  const painterRef = useRef<FramePainter | null>(null);
   /** Bumped on stop, so an in-flight `buildPayload` cannot resurrect playback. */
   const runIdRef = useRef(0);
   const aliveRef = useRef(true);
@@ -175,41 +177,69 @@ export function SendView(): JSX.Element {
   useEffect(() => {
     if (phase.kind !== 'playing') return;
     const emitter = phase.emitter;
+    const canvas = tileRefs.current[0];
+    if (canvas === null || canvas === undefined) return;
 
-    const nextFrame = (): RenderedQr => buildQr(base44Encode(emitter.next()), phase.profile);
+    const dpr = globalThis.devicePixelRatio || 1;
+    const scale = moduleScale(phase.profile.modules, Math.floor(stageSizeRef.current * dpr));
+    const side = symbolSide(phase.profile.modules, scale);
+    canvas.width = side;
+    canvas.height = side;
+    canvas.style.width = `${side / dpr}px`;
+    canvas.style.height = `${side / dpr}px`;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (ctx === null) return;
 
-    // A transfer that fits in one frame has nothing to animate. Draw it once and
-    // leave it on screen — no timer, no repaint, and any scanner gets it in a
-    // single glance.
+    // Frames are painted ahead on worker threads, so this loop only blits. A V40
+    // encode alone can eat most of a 33ms budget on a phone; leaving it in the
+    // loop would make the frame rate a function of CPU rather than optics.
+    const painter = createFramePainter({
+      nextText: () => base44Encode(emitter.next()),
+      profile: phase.profile,
+      scale,
+      dark: drawStyle.dark,
+      rounded: drawStyle.rounded,
+    });
+    painterRef.current = painter;
+
+    const paint = (): void => {
+      const bitmap = painter.take();
+      // Nothing buffered: hold the current symbol rather than blanking. The
+      // receiver sees a duplicate, which costs one frame and nothing else.
+      if (bitmap === null) return;
+      ctx.drawImage(bitmap, 0, 0);
+      bitmap.close();
+    };
+
     if (emitter.isStatic) {
-      const canvas = tileRefs.current[0];
-      if (canvas !== null && canvas !== undefined) {
-        drawQr(canvas, nextFrame(), { cssSize: stageSizeRef.current, ...drawStyle });
-      }
-      return;
+      // One frame is the whole transfer. The painter is asynchronous, so retry
+      // until the first bitmap lands, then stop — there is nothing to animate.
+      let attempts = 0;
+      const settle = (): void => {
+        const bitmap = painter.take();
+        if (bitmap !== null) {
+          ctx.drawImage(bitmap, 0, 0);
+          bitmap.close();
+          return;
+        }
+        if (attempts++ < 60) globalThis.setTimeout(settle, 25);
+      };
+      settle();
+      return () => {
+        painter.close();
+        painterRef.current = null;
+      };
     }
 
     const interval = 1000 / fps;
-
     let raf = 0;
     let last = -1;
-    let pending: RenderedQr | null = null;
-
-    const show = (): void => {
-      const canvas = tileRefs.current[0];
-      if (canvas === null || canvas === undefined) return;
-      drawQr(canvas, pending ?? nextFrame(), { cssSize: stageSizeRef.current, ...drawStyle });
-      // One-frame lookahead: build the *next* symbol right after painting so the
-      // encode cost lands in the idle tail of the period instead of between the
-      // deadline and the paint, where it would show up as playback jitter.
-      pending = nextFrame();
-    };
 
     const tick = (now: number): void => {
       raf = requestAnimationFrame(tick);
       if (last < 0) {
         last = now;
-        show();
+        paint();
         return;
       }
       const elapsed = now - last;
@@ -219,11 +249,11 @@ export function SendView(): JSX.Element {
       // pause — resync rather than burning through a catch-up burst the camera
       // could never resolve.
       last = elapsed > interval * 3 ? now : last + interval;
-      show();
+      paint();
     };
 
-    // rAF is throttled to a stop while hidden; restarting from a stale
-    // timestamp would fire a burst of frames on return.
+    // rAF is throttled to a stop while hidden; restarting from a stale timestamp
+    // would fire a burst of frames on return.
     const onVisibility = (): void => {
       if (document.visibilityState === 'visible') last = -1;
     };
@@ -234,8 +264,10 @@ export function SendView(): JSX.Element {
     return () => {
       cancelAnimationFrame(raf);
       document.removeEventListener('visibilitychange', onVisibility);
+      painter.close();
+      painterRef.current = null;
     };
-  }, [phase, fps, qrColor, custom]);
+  }, [phase, fps, drawStyle.dark, drawStyle.rounded]);
 
   /* ─── canvas sizing ───────────────────────────────────────────────────── */
 
@@ -246,6 +278,22 @@ export function SendView(): JSX.Element {
     if (phase.kind !== 'playing') return;
     const fitted = Math.floor(Math.min(stageArea.width - 24, stageArea.height - 24));
     stageSizeRef.current = Math.max(MIN_STAGE_CSS_SIZE, fitted);
+
+    const canvas = tileRefs.current[0];
+    const painter = painterRef.current;
+    if (canvas === null || canvas === undefined || painter === null) return;
+
+    const dpr = globalThis.devicePixelRatio || 1;
+    const scale = moduleScale(phase.profile.modules, Math.floor(stageSizeRef.current * dpr));
+    const side = symbolSide(phase.profile.modules, scale);
+    if (canvas.width !== side) {
+      canvas.width = side;
+      canvas.height = side;
+      canvas.style.width = `${side / dpr}px`;
+      canvas.style.height = `${side / dpr}px`;
+      // Buffered frames were painted at the old size and cannot be shown.
+      painter.resize(scale);
+    }
   }, [phase, stageArea, fullscreen]);
 
   /* ─── static onboarding QR ────────────────────────────────────────────── */

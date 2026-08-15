@@ -19,9 +19,8 @@ import wasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url';
 
 export interface DecodeRequest {
   id: number;
+  /** Already cropped and sized by the caller — resampling again would only blur. */
   bitmap: ImageBitmap;
-  /** Longest edge handed to the decoder; the bitmap is scaled down to fit. */
-  roi: number;
 }
 
 export interface DecodeResponse {
@@ -46,10 +45,9 @@ function init(): Promise<unknown> {
 // Warm the module up immediately: the first frame should not pay for it.
 void init();
 
-function pixels(bitmap: ImageBitmap, roi: number): ImageData {
-  const scale = Math.min(1, roi / Math.max(bitmap.width, bitmap.height));
-  const w = Math.max(1, Math.round(bitmap.width * scale));
-  const h = Math.max(1, Math.round(bitmap.height * scale));
+function pixels(bitmap: ImageBitmap): ImageData {
+  const w = bitmap.width;
+  const h = bitmap.height;
 
   if (surface === null || surface.width !== w || surface.height !== h) {
     surface = new OffscreenCanvas(w, h);
@@ -62,12 +60,12 @@ function pixels(bitmap: ImageBitmap, roi: number): ImageData {
 }
 
 self.onmessage = async (event: MessageEvent<DecodeRequest>): Promise<void> => {
-  const { id, bitmap, roi } = event.data;
+  const { id, bitmap } = event.data;
   const started = performance.now();
   let texts: string[] = [];
   try {
     await init();
-    const results = await readBarcodes(pixels(bitmap, roi), {
+    const results = await readBarcodes(pixels(bitmap), {
       formats: ['QRCode'],
       // Exactly one symbol is ever on screen; saying so lets the decoder stop at
       // the first hit instead of scanning the rest of the image.
