@@ -179,23 +179,49 @@ export async function historyBytes(): Promise<number> {
   return (await listHistory()).reduce((sum, e) => sum + e.size, 0);
 }
 
+export interface EvictionPlan {
+  /** Do not store the incoming entry at all. */
+  reject: boolean;
+  /** Keys to remove first, oldest to newest. */
+  evict: number[];
+}
+
 /**
- * Store a completed receive, evicting the oldest entries to stay under the cap.
+ * Decide what to drop to fit `incomingSize` under the cap.
  *
- * A payload larger than the whole budget is not stored at all rather than
- * emptying history to make room for it — deleting everything the user kept in
- * order to hold one file they did not ask to keep is the wrong trade.
+ * Kept as a pure function because it is the part with a policy in it, and a
+ * policy that can only be exercised through IndexedDB is a policy nobody checks.
+ *
+ * A payload larger than the whole budget is rejected rather than accepted by
+ * emptying history for it — deleting everything the user chose to keep in order
+ * to hold one file they never asked to keep is the wrong trade. Eviction is
+ * oldest-first, which is the only ordering that does not require guessing what
+ * the user values.
  */
+export function planEviction(
+  existing: readonly { receivedAt: number; size: number }[],
+  incomingSize: number,
+  maxBytes: number = HISTORY_MAX_BYTES,
+): EvictionPlan {
+  if (incomingSize > maxBytes) return { reject: true, evict: [] };
+
+  const oldestFirst = [...existing].sort((a, b) => a.receivedAt - b.receivedAt);
+  let total = oldestFirst.reduce((sum, e) => sum + e.size, 0) + incomingSize;
+  const evict: number[] = [];
+  for (const entry of oldestFirst) {
+    if (total <= maxBytes) break;
+    evict.push(entry.receivedAt);
+    total -= entry.size;
+  }
+  return { reject: false, evict };
+}
+
+/** Store a completed receive, evicting the oldest entries to stay under the cap. */
 export async function saveHistory(entry: HistoryEntry): Promise<void> {
-  if (entry.size > HISTORY_MAX_BYTES) return;
   try {
-    const existing = await listHistory();
-    let total = existing.reduce((sum, e) => sum + e.size, 0) + entry.size;
-    // Oldest first, since `listHistory` returns newest first.
-    for (let i = existing.length - 1; i >= 0 && total > HISTORY_MAX_BYTES; i--) {
-      await deleteHistory(existing[i].receivedAt);
-      total -= existing[i].size;
-    }
+    const plan = planEviction(await listHistory(), entry.size);
+    if (plan.reject) return;
+    for (const key of plan.evict) await deleteHistory(key);
     await tx('readwrite', (s) => s.put(entry) as IDBRequest<IDBValidKey>, HISTORY);
   } catch {
     // Storage pressure or private mode. History is a convenience; a receive

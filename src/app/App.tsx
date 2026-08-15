@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
-import { LOCALES, localeInfo, useT, type Locale } from './i18n.js';
+import { localeInfo, useT } from './i18n.js';
 import { useAppStore } from './store.js';
 import { SendView } from './views/SendView.js';
 import { ShareDialog } from './views/ShareDialog.js';
+import { SettingsDialog } from './views/SettingsDialog.js';
+import { Viewer } from './views/Viewer.js';
+import type { HistoryEntry } from '../platform/storage.js';
 import { ReceiveView } from './views/ReceiveView.js';
 import { pruneTransfers } from '../platform/storage.js';
 
@@ -16,9 +19,11 @@ function initialTab(): Tab {
 export function App(): JSX.Element {
   const t = useT();
   const locale = useAppStore((s) => s.locale);
-  const setLocale = useAppStore((s) => s.setLocale);
   const [tab, setTab] = useState<Tab>(initialTab);
   const [sharing, setSharing] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  /** A stored transfer being re-opened from history; takes over the main area. */
+  const [viewing, setViewing] = useState<HistoryEntry | null>(null);
 
   // `replaceState` rather than assigning to `location.hash`: the latter pushes a
   // history entry per tab switch, so Back would leave the URL and the rendered
@@ -72,18 +77,24 @@ export function App(): JSX.Element {
               />
             </svg>
           </button>
-          <select
-          className="lang-select"
-          value={locale}
-          onChange={(event) => setLocale(event.target.value as Locale)}
-          aria-label={t('app.language')}
-        >
-            {LOCALES.map((l) => (
-              <option key={l.code} value={l.code}>
-                {l.label}
-              </option>
-            ))}
-          </select>
+          {/* Language moved into settings: it is set once and then never
+              touched, so a permanent control the width of the longest language
+              name was paying masthead space every session for a decision made
+              in the first. */}
+          <button
+            type="button"
+            className="btn btn-sm btn-icon"
+            onClick={() => setSettingsOpen(true)}
+            aria-label={t('settings.title')}
+            title={t('settings.title')}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+              <path
+                d="M12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm7.4-2.6.1-.9-.1-.9 1.9-1.5a.5.5 0 0 0 .12-.63l-1.8-3.12a.5.5 0 0 0-.6-.22l-2.24.9a7.3 7.3 0 0 0-1.55-.9l-.34-2.38a.5.5 0 0 0-.5-.43h-3.6a.5.5 0 0 0-.5.43l-.34 2.38c-.55.23-1.07.53-1.55.9l-2.24-.9a.5.5 0 0 0-.6.22l-1.8 3.12a.5.5 0 0 0 .12.63L4.6 11.1l-.1.9.1.9-1.9 1.5a.5.5 0 0 0-.12.63l1.8 3.12a.5.5 0 0 0 .6.22l2.24-.9c.48.37 1 .67 1.55.9l.34 2.38a.5.5 0 0 0 .5.43h3.6a.5.5 0 0 0 .5-.43l.34-2.38c.55-.23 1.07-.53 1.55-.9l2.24.9a.5.5 0 0 0 .6-.22l1.8-3.12a.5.5 0 0 0-.12-.63l-1.9-1.5Z"
+                fill="currentColor"
+              />
+            </svg>
+          </button>
         </div>
       </header>
 
@@ -108,11 +119,30 @@ export function App(): JSX.Element {
         </button>
       </div>
 
-      <main className="content">{tab === 'send' ? <SendView /> : <ReceiveView />}</main>
+      <main className="content">
+        {viewing !== null ? (
+          <Viewer
+            name={viewing.name}
+            mime={viewing.mime}
+            data={viewing.data}
+            integrity={viewing.integrity}
+            onReset={() => setViewing(null)}
+          />
+        ) : tab === 'send' ? (
+          <SendView />
+        ) : (
+          <ReceiveView />
+        )}
+      </main>
 
       <p className="footnote">{t('app.privacy')}</p>
 
       <ShareDialog open={sharing} onClose={() => setSharing(false)} />
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onOpenEntry={setViewing}
+      />
     </div>
   );
 }

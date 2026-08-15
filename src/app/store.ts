@@ -30,6 +30,18 @@ interface AppState {
   /** Module colour, used by `custom`. Rejected at draw time without enough contrast. */
   qrColor: string;
   setQrColor: (color: string) => void;
+
+  /**
+   * Whether completed receives are kept on this device.
+   *
+   * On by default, because a transfer that vanishes when the tab closes is a
+   * worse product and the data never leaves the machine either way. Off is a
+   * real need though: a shared or public computer is exactly where someone
+   * would use an air-gapped transfer, and exactly where a leftover copy of what
+   * they received is a problem.
+   */
+  historyEnabled: boolean;
+  setHistoryEnabled: (enabled: boolean) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -49,10 +61,13 @@ export const useAppStore = create<AppState>()(
 
       qrColor: QR_COLORS[1].hex,
       setQrColor: (qrColor) => set({ qrColor }),
+
+      historyEnabled: true,
+      setHistoryEnabled: (historyEnabled) => set({ historyEnabled }),
     }),
     {
       name: 'qr-sender-settings',
-      version: 6,
+      version: 7,
       // Without this, a bumped version discards nothing but also migrates
       // nothing, and new fields silently arrive undefined for returning users.
       //

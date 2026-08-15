@@ -54,7 +54,7 @@ const STAGE_PADDING_PX = 8;
  * `.qr-stage` is forced white in both themes so the symbol is never inverted —
  * which means controls inside it cannot inherit the theme's text colour.
  */
-const STAGE_TEXT: CSSProperties = { color: 'var(--muted)', fontSize: '12px', margin: 0 };
+const STAGE_TEXT: CSSProperties = { color: 'var(--text-dim)', fontSize: '12px', margin: 0 };
 
 type Source = { kind: 'file'; file: File } | { kind: 'text'; text: string };
 

@@ -21,7 +21,13 @@ import type { Manifest } from '../../core/manifest.js';
 import { openPayload, WrongPassphraseError } from '../../core/payload.js';
 import { Receiver, type IntegrityState, type ReceiverProgress } from '../../core/receiver.js';
 import { CameraPermissionError, Scanner, type ScannerStats } from '../../platform/camera.js';
-import { deleteTransfer, listTransfers, saveTransfer, type StoredTransfer } from '../../platform/storage.js';
+import {
+  deleteTransfer,
+  listTransfers,
+  saveHistory,
+  saveTransfer,
+  type StoredTransfer,
+} from '../../platform/storage.js';
 import { acquireWakeLock } from '../../platform/wakeLock.js';
 
 import { focusQuality, type FocusQuality } from '../../platform/sharpness.js';
@@ -181,6 +187,9 @@ export function ReceiveView(): JSX.Element {
   const [decodeFps, setDecodeFps] = useState(0);
   /** Best rate this device has reached, the reference the coaching compares against. */
   const [peakFps, setPeakFps] = useState(0);
+  const historyEnabled = useAppStore((s) => s.historyEnabled);
+  const historyEnabledRef = useRef(historyEnabled);
+  historyEnabledRef.current = historyEnabled;
   const [sharpness, setSharpness] = useState(-1);
   const [fixedFocus, setFixedFocus] = useState(false);
   /** Useful symbols per second, measured. 0 means "not enough data yet". */
@@ -245,6 +254,7 @@ export function ReceiveView(): JSX.Element {
       .then((env) => {
         if (!aliveRef.current) return;
         setOpened({ name: env.name, mime: env.mime, data: env.data });
+        keep(env, r.verifyIntegrity());
       })
       .catch(() => {
         if (aliveRef.current) setOpenError('recv.mismatch');
@@ -447,6 +457,31 @@ export function ReceiveView(): JSX.Element {
     setPhase('scanning');
   }, []);
 
+  /**
+   * Record a completed receive so it can be reopened later.
+   *
+   * Called from both places a payload finishes opening — the automatic path and
+   * the one behind a passphrase. Routing them through one helper is what stops
+   * history from quietly covering only the unencrypted case.
+   *
+   * Failures are swallowed inside `saveHistory`: a transfer that just succeeded
+   * must not be reported as failed because the device is out of storage.
+   */
+  const keep = useCallback(
+    (env: { name: string; mime: string; data: Uint8Array }, verified: IntegrityState): void => {
+      if (!historyEnabledRef.current) return;
+      void saveHistory({
+        receivedAt: Date.now(),
+        name: env.name,
+        mime: env.mime,
+        size: env.data.byteLength,
+        integrity: verified,
+        data: env.data,
+      });
+    },
+    [],
+  );
+
   /** Persist immediately rather than losing up to `SAVE_INTERVAL_MS` of work. */
   const stopScan = useCallback((): void => {
     const r = receiverRef.current;
@@ -507,6 +542,7 @@ export function ReceiveView(): JSX.Element {
       const env = await openPayload(payload, manifest, passphrase);
       if (!aliveRef.current) return;
       setOpened({ name: env.name, mime: env.mime, data: env.data });
+      keep(env, integrity);
     } catch (err) {
       if (!aliveRef.current) return;
       setOpenError(err instanceof WrongPassphraseError ? 'recv.wrongPassphrase' : 'recv.mismatch');
