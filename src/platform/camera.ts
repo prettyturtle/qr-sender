@@ -16,7 +16,12 @@
  *    pixel data.
  */
 
-import { createDecodePool, decodeConcurrency, type DecodePool } from './decodePool.js';
+import {
+  createDecodePool,
+  decodeConcurrency,
+  type DecodePool,
+  type SymbolBox,
+} from './decodePool.js';
 import type { DetectorKind } from './detect.js';
 
 export interface ScannerStats {
@@ -28,6 +33,8 @@ export interface ScannerStats {
   resolution: string;
   /** Edge length currently handed to the decoder. */
   roi: number;
+  /** Fraction of the frame's short side the crop currently covers; 1 means no tracking. */
+  cropFraction: number;
   /** Frame rate the camera actually settled on, which caps safe playback rates. */
   cameraFps: number;
   /** How many decodes may run at once. */
@@ -57,9 +64,32 @@ const ROI_FAST = 960;
 /** How long to persist with one region size before trying the other. */
 const ROI_SWITCH_MS = 4000;
 
+/**
+ * Padding around a tracked symbol, as a fraction of its size.
+ *
+ * Cropping to the symbol is the single cheapest way to buy pixels per module: a
+ * user who frames it at half the width is throwing away three quarters of the
+ * sensor's budget for it. The margin has to absorb hand movement between one
+ * frame and the next, so it is generous rather than tight.
+ */
+const TRACK_MARGIN = 0.35;
+
+/** Give up on a track after this many consecutive misses and re-acquire wide. */
+const TRACK_MISS_LIMIT = 8;
+
+/** Never crop below this, or a momentary bad box would lock the scanner onto noise. */
+const MIN_TRACK_FRACTION = 0.25;
+
 export interface ScannerOptions {
   video: HTMLVideoElement;
-  onText: (text: string) => void;
+  /**
+   * Returns whether the text belonged to the transfer being received.
+   *
+   * The answer steers symbol tracking. A sender's screen also shows a small
+   * static onboarding QR beside the animated one; without this the tracker
+   * would happily lock onto that and never see the data symbol again.
+   */
+  onText: (text: string) => boolean;
   onStats?: (stats: ScannerStats) => void;
   onError?: (err: unknown) => void;
   force?: DetectorKind;
@@ -107,12 +137,17 @@ export class Scanner {
   private windowStart = 0;
   private lastDecodeAt = 0;
   private degraded = false;
+  /** Last known symbol location, in video pixels. */
+  private track: SymbolBox | null = null;
+  private trackMisses = 0;
+  private lastCropFraction = 1;
   private stats: ScannerStats = {
     attemptFps: 0,
     decodeFps: 0,
     detector: 'zxing-wasm',
     resolution: '',
     roi: ROI_NATIVE,
+    cropFraction: 1,
     cameraFps: 0,
     concurrency: 1,
     latencyMs: 0,
@@ -199,15 +234,16 @@ export class Scanner {
     // Every slot busy: the next camera frame is more useful than a queued one.
     if (pool.inFlight + this.grabbing >= pool.concurrency) return;
 
-    const side = Math.min(video.videoWidth, video.videoHeight);
-    const sx = (video.videoWidth - side) / 2;
-    const sy = (video.videoHeight - side) / 2;
+    const crop = this.cropRegion(video);
+    const { sx, sy, side } = crop;
+    if (side < 1) return;
     const roi = this.targetRoi();
 
     this.grabbing++;
     // Resize here rather than in the worker: the compositor does it, and it is
     // the only place that reaches *both* backends — the native detector takes
     // the bitmap as-is and would otherwise search a full-resolution frame.
+    this.lastCropFraction = side / Math.min(video.videoWidth, video.videoHeight);
     const target = Math.min(roi, side);
     const resize: ImageBitmapOptions =
       target < side ? { resizeWidth: target, resizeHeight: target, resizeQuality: 'medium' } : {};
@@ -219,12 +255,19 @@ export class Scanner {
           bitmap.close();
           return;
         }
-        const texts = await pool.decode(bitmap);
+        const { texts, box } = await pool.decode(bitmap);
         this.attempts++;
+        let useful = false;
         if (texts.length > 0) {
           this.decodes++;
           this.lastDecodeAt = Date.now();
-          for (const t of texts) this.opts.onText(t);
+          for (const t of texts) useful = this.opts.onText(t) || useful;
+        }
+        if (useful) {
+          this.updateTrack(crop, target, box);
+        } else if (++this.trackMisses >= TRACK_MISS_LIMIT) {
+          // Lost it: widen back out rather than hunting inside a stale window.
+          this.track = null;
         }
         this.report();
       })
@@ -251,12 +294,59 @@ export class Scanner {
       attemptFps: (this.attempts * 1000) / elapsed,
       decodeFps: (this.decodes * 1000) / elapsed,
       roi: this.targetRoi(),
+      cropFraction: this.lastCropFraction,
       latencyMs: this.pool?.latencyMs ?? 0,
     };
     this.attempts = 0;
     this.decodes = 0;
     this.windowStart = now;
     this.opts.onStats?.(this.stats);
+  }
+
+  /**
+   * Where to crop this frame: the tracked symbol if one is known, otherwise the
+   * centre square.
+   */
+  private cropRegion(video: HTMLVideoElement): { sx: number; sy: number; side: number } {
+    const full = Math.min(video.videoWidth, video.videoHeight);
+    const track = this.track;
+    if (track === null) {
+      return {
+        sx: Math.round((video.videoWidth - full) / 2),
+        sy: Math.round((video.videoHeight - full) / 2),
+        side: full,
+      };
+    }
+    const padded = track.size * (1 + TRACK_MARGIN * 2);
+    const side = Math.min(
+      Math.max(padded, full * MIN_TRACK_FRACTION),
+      video.videoWidth,
+      video.videoHeight,
+    );
+    const cx = track.x + track.size / 2;
+    const cy = track.y + track.size / 2;
+    const rounded = Math.round(side);
+    return {
+      sx: Math.round(Math.max(0, Math.min(video.videoWidth - rounded, cx - rounded / 2))),
+      sy: Math.round(Math.max(0, Math.min(video.videoHeight - rounded, cy - rounded / 2))),
+      side: rounded,
+    };
+  }
+
+  /** Map the decoder's box back into video coordinates and keep it for next time. */
+  private updateTrack(
+    crop: { sx: number; sy: number; side: number },
+    bitmapSide: number,
+    box: SymbolBox | null,
+  ): void {
+    this.trackMisses = 0;
+    if (box === null || box.size <= 0) return;
+    const factor = crop.side / bitmapSide;
+    this.track = {
+      x: crop.sx + box.x * factor,
+      y: crop.sy + box.y * factor,
+      size: box.size * factor,
+    };
   }
 
   private targetRoi(): number {

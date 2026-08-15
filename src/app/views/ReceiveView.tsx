@@ -231,17 +231,20 @@ export function ReceiveView(): JSX.Element {
       });
   }, []);
 
-  const handleText = useCallback((text: string): void => {
+  const handleText = useCallback((text: string): boolean => {
     const r = receiverRef.current;
-    if (r === null) return;
+    if (r === null) return false;
     const bytes = base44Decode(text);
-    if (bytes === null) return;
+    if (bytes === null) return false;
 
     const result = r.ingest(bytes);
     // A foreign or duplicate frame still proves the camera is reading, which is
     // what the silence timer is actually asking about. The foreign stream itself
     // is picked up from `receiver.foreignStreamId` by the publisher.
     if (result !== 'invalid') lastReadAtRef.current = Date.now();
+    // Only frames from *this* transfer are worth aiming the crop at — the
+    // sender's screen also carries a static onboarding QR.
+    return result === 'ok' || result === 'duplicate' || result === 'manifest';
   }, []);
 
   const handleStats = useCallback((stats: ScannerStats): void => {
@@ -279,7 +282,10 @@ export function ReceiveView(): JSX.Element {
         hw === null
           ? ''
           : `${hw.detector === 'barcode-detector' ? 'native' : 'wasm'} ×${hw.concurrency}` +
-            (hw.cameraFps > 0 ? ` · ${hw.cameraFps}fps` : '');
+            (hw.cameraFps > 0 ? ` · ${hw.cameraFps}fps` : '') +
+            // Below 1 means the crop is locked onto the symbol rather than the
+            // whole frame, which is where the pixels-per-module gain comes from.
+            (hw.cropFraction < 0.95 ? ` · ×${(1 / hw.cropFraction).toFixed(1)}` : '');
       setEngine((prev) => (prev === label ? prev : label));
       setSilent(now - lastReadAtRef.current >= SILENT_MS);
 

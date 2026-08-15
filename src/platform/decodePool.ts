@@ -17,7 +17,9 @@
  */
 
 import { barcodeDetectorAvailable, type DetectorKind } from './detect.js';
-import type { DecodeRequest, DecodeResponse } from './decodeWorker.js';
+import type { DecodeRequest, DecodeResponse, SymbolBox } from './decodeWorker.js';
+
+export type { SymbolBox };
 
 export interface DecodePool {
   readonly kind: DetectorKind;
@@ -27,10 +29,11 @@ export interface DecodePool {
   /** Rolling mean of decoder latency in milliseconds. */
   readonly latencyMs: number;
   /**
-   * Resolves to the texts found, or an empty array — never rejects. The bitmap
-   * arrives already cropped and sized; no backend rescales it.
+   * Never rejects. The bitmap arrives already cropped and sized; no backend
+   * rescales it. `box` is where the symbol was found, in that bitmap's
+   * coordinates, so the caller can aim the next crop at it.
    */
-  decode(bitmap: ImageBitmap): Promise<string[]>;
+  decode(bitmap: ImageBitmap): Promise<DecodeOutcome>;
   close(): void;
 }
 
@@ -40,6 +43,11 @@ export interface DecodePool {
  * Deliberately aggressive — the point is to finish the transfer, and a phone
  * that runs warm for a minute is a better outcome than one that takes five.
  */
+export interface DecodeOutcome {
+  texts: string[];
+  box: SymbolBox | null;
+}
+
 export function decodeConcurrency(): number {
   const cores = navigator.hardwareConcurrency || 4;
   return Math.max(2, Math.min(8, cores));
@@ -67,7 +75,7 @@ class WorkerPool implements DecodePool {
 
   private readonly workers: Worker[] = [];
   private readonly idle: Worker[] = [];
-  private readonly pending = new Map<number, (texts: string[]) => void>();
+  private readonly pending = new Map<number, (outcome: DecodeOutcome) => void>();
   private readonly owner = new Map<number, Worker>();
   private readonly latency = new LatencyMeter();
   private nextId = 1;
@@ -78,20 +86,20 @@ class WorkerPool implements DecodePool {
     for (let i = 0; i < size; i++) {
       const worker = new Worker(new URL('./decodeWorker.ts', import.meta.url), { type: 'module' });
       worker.onmessage = (event: MessageEvent<DecodeResponse>) => {
-        const { id, texts, ms } = event.data;
+        const { id, texts, box, ms } = event.data;
         this.latency.add(ms);
         const resolve = this.pending.get(id);
         this.pending.delete(id);
         this.owner.delete(id);
         this.idle.push(worker);
         this.busy--;
-        resolve?.(texts);
+        resolve?.({ texts, box });
       };
       // A dead worker must not strand its caller or shrink the pool silently.
       worker.onerror = () => {
         for (const [id, w] of this.owner) {
           if (w !== worker) continue;
-          this.pending.get(id)?.([]);
+          this.pending.get(id)?.({ texts: [], box: null });
           this.pending.delete(id);
           this.owner.delete(id);
           this.busy--;
@@ -111,17 +119,17 @@ class WorkerPool implements DecodePool {
     return this.latency.value;
   }
 
-  decode(bitmap: ImageBitmap): Promise<string[]> {
+  decode(bitmap: ImageBitmap): Promise<DecodeOutcome> {
     const worker = this.idle.pop();
     if (worker === undefined) {
       bitmap.close();
-      return Promise.resolve([]);
+      return Promise.resolve({ texts: [], box: null });
     }
     const id = this.nextId++;
     this.busy++;
     this.owner.set(id, worker);
     const request: DecodeRequest = { id, bitmap };
-    return new Promise<string[]>((resolve) => {
+    return new Promise<DecodeOutcome>((resolve) => {
       this.pending.set(id, resolve);
       worker.postMessage(request, [bitmap]);
     });
@@ -131,7 +139,7 @@ class WorkerPool implements DecodePool {
     for (const w of this.workers) w.terminate();
     this.workers.length = 0;
     this.idle.length = 0;
-    for (const resolve of this.pending.values()) resolve([]);
+    for (const resolve of this.pending.values()) resolve({ texts: [], box: null });
     this.pending.clear();
     this.owner.clear();
     this.busy = 0;
@@ -139,7 +147,9 @@ class WorkerPool implements DecodePool {
 }
 
 interface BarcodeDetectorLike {
-  detect(source: ImageBitmap): Promise<Array<{ rawValue: string }>>;
+  detect(source: ImageBitmap): Promise<
+    Array<{ rawValue: string; boundingBox?: { x: number; y: number; width: number; height: number } }>
+  >;
 }
 
 class NativePool implements DecodePool {
@@ -171,19 +181,22 @@ class NativePool implements DecodePool {
     return this.latency.value;
   }
 
-  async decode(bitmap: ImageBitmap): Promise<string[]> {
+  async decode(bitmap: ImageBitmap): Promise<DecodeOutcome> {
     const detector = this.free.pop();
     if (detector === undefined || this.closed) {
       bitmap.close();
-      return [];
+      return { texts: [], box: null };
     }
     this.busy++;
     const started = performance.now();
     try {
       const found = await detector.detect(bitmap);
-      return found.map((f) => f.rawValue);
+      const rect = found[0]?.boundingBox;
+      const box: SymbolBox | null =
+        rect === undefined ? null : { x: rect.x, y: rect.y, size: Math.max(rect.width, rect.height) };
+      return { texts: found.map((f) => f.rawValue), box };
     } catch {
-      return [];
+      return { texts: [], box: null };
     } finally {
       this.latency.add(performance.now() - started);
       bitmap.close();

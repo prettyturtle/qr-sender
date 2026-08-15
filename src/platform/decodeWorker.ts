@@ -23,9 +23,18 @@ export interface DecodeRequest {
   bitmap: ImageBitmap;
 }
 
+/** Axis-aligned box in the coordinate space of the bitmap that was decoded. */
+export interface SymbolBox {
+  x: number;
+  y: number;
+  size: number;
+}
+
 export interface DecodeResponse {
   id: number;
   texts: string[];
+  /** Where the symbol was, so the next frame can be cropped to it. */
+  box: SymbolBox | null;
   /** Milliseconds spent inside the decoder, for the throughput readout. */
   ms: number;
 }
@@ -63,6 +72,7 @@ self.onmessage = async (event: MessageEvent<DecodeRequest>): Promise<void> => {
   const { id, bitmap } = event.data;
   const started = performance.now();
   let texts: string[] = [];
+  let box: SymbolBox | null = null;
   try {
     await init();
     const results = await readBarcodes(pixels(bitmap), {
@@ -76,11 +86,20 @@ self.onmessage = async (event: MessageEvent<DecodeRequest>): Promise<void> => {
       tryDownscale: true,
     });
     texts = results.map((r) => r.text);
+    const pos = results[0]?.position;
+    if (pos !== undefined) {
+      const xs = [pos.topLeft.x, pos.topRight.x, pos.bottomLeft.x, pos.bottomRight.x];
+      const ys = [pos.topLeft.y, pos.topRight.y, pos.bottomLeft.y, pos.bottomRight.y];
+      const x0 = Math.min(...xs);
+      const y0 = Math.min(...ys);
+      // Square, because the symbol is: a tight rectangle would clip a rotated one.
+      box = { x: x0, y: y0, size: Math.max(Math.max(...xs) - x0, Math.max(...ys) - y0) };
+    }
   } catch {
     texts = [];
   } finally {
     bitmap.close();
   }
-  const response: DecodeResponse = { id, texts, ms: performance.now() - started };
+  const response: DecodeResponse = { id, texts, box, ms: performance.now() - started };
   self.postMessage(response);
 };

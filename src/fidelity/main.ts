@@ -314,7 +314,7 @@ async function runPool(): Promise<void> {
         continue;
       }
       const bitmap = await createImageBitmap(canvas);
-      const task = pool.decode(bitmap).then((texts) => {
+      const task = pool.decode(bitmap).then(({ texts }) => {
         if (texts[0] !== text) ok = false;
         done++;
       });
