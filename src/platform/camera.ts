@@ -20,7 +20,30 @@ export interface ScannerStats {
   decodeFps: number;
   detector: DetectorKind;
   resolution: string;
+  /** Edge length currently handed to the detector — see the ROI note below. */
+  roi: number;
 }
+
+/**
+ * Default region handed to the detector. Sized for the common case: a phone
+ * camera reading a large monitor, where the symbol is already plentiful in
+ * pixels and decode speed is the scarce resource.
+ */
+const ROI_FAST = 800;
+
+/**
+ * Escalated region, used when nothing is decoding.
+ *
+ * The opposite case — a webcam reading a *phone* screen — is resolution-starved
+ * rather than CPU-starved. A 125-module symbol on a 6cm phone screen is about
+ * 0.5mm per module, so downscaling 1080p to 800 costs roughly a quarter of the
+ * working distance at exactly the moment it is scarcest. Desktop targets 6fps
+ * and has the headroom, so when reads stop we trade speed for pixels.
+ */
+const ROI_HIGH = 1440;
+
+/** How long to persist with one region size before trying the other. */
+const ROI_SWITCH_MS = 4000;
 
 export interface ScannerOptions {
   video: HTMLVideoElement;
@@ -28,7 +51,7 @@ export interface ScannerOptions {
   onStats?: (stats: ScannerStats) => void;
   onError?: (err: unknown) => void;
   force?: DetectorKind;
-  /** Longest edge of the region handed to the detector. */
+  /** Overrides the adaptive region sizing. Used by benchmarks, not by the app. */
   roiSize?: number;
 }
 
@@ -59,11 +82,14 @@ export class Scanner {
   private attempts = 0;
   private decodes = 0;
   private windowStart = 0;
+  private lastDecodeAt = 0;
+  private highRoi = false;
   private stats: ScannerStats = {
     attemptFps: 0,
     decodeFps: 0,
     detector: 'zxing-wasm',
     resolution: '',
+    roi: ROI_FAST,
   };
 
   private constructor(private readonly opts: ScannerOptions) {}
@@ -111,6 +137,7 @@ export class Scanner {
 
     this.ctx = this.work.getContext('2d', { alpha: false, willReadFrequently: true });
     this.windowStart = performance.now();
+    this.lastDecodeAt = Date.now();
     this.loop();
   }
 
@@ -137,6 +164,7 @@ export class Scanner {
       this.attempts++;
       if (texts.length > 0) {
         this.decodes++;
+        this.lastDecodeAt = Date.now();
         for (const t of texts) this.opts.onText(t);
       }
     } catch (err) {
@@ -146,10 +174,18 @@ export class Scanner {
     const now = performance.now();
     const elapsed = now - this.windowStart;
     if (elapsed >= 1000) {
+      // Nothing is decoding: alternate between the two region sizes rather than
+      // guessing which resource is short. One of them is usually right, and
+      // trying both beats picking wrong and never recovering.
+      if (Date.now() - this.lastDecodeAt >= ROI_SWITCH_MS) {
+        this.highRoi = !this.highRoi;
+        this.lastDecodeAt = Date.now();
+      }
       this.stats = {
         ...this.stats,
         attemptFps: (this.attempts * 1000) / elapsed,
         decodeFps: (this.decodes * 1000) / elapsed,
+        roi: this.targetRoi(),
       };
       this.attempts = 0;
       this.decodes = 0;
@@ -158,10 +194,15 @@ export class Scanner {
     }
   }
 
+  private targetRoi(): number {
+    if (this.opts.roiSize !== undefined) return this.opts.roiSize;
+    return this.highRoi ? ROI_HIGH : ROI_FAST;
+  }
+
   /** Centre square of the viewfinder, downscaled — the detector never sees more than it needs. */
   private grab(): ImageData {
     const video = this.opts.video;
-    const target = this.opts.roiSize ?? 800;
+    const target = this.targetRoi();
     const side = Math.min(video.videoWidth, video.videoHeight);
     const out = Math.min(target, side);
 
