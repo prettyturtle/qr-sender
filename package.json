@@ -6,12 +6,12 @@
   "description": "Air-gapped file transfer over an optical screen-to-camera channel",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -p tsconfig.json && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
     "sim": "vitest run src/core/__tests__/simulation.test.ts --reporter=verbose",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "qrcode": "^1.5.4",

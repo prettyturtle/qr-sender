@@ -103,16 +103,10 @@ function grab(): ImageData {
   return ctx.getImageData(0, 0, canvas.width, canvas.height);
 }
 
-const dummyVideo = document.createElement('video');
-
 async function detectOnce(detector: FrameDetector): Promise<string | null> {
-  // BarcodeDetector accepts the canvas directly; zxing needs the pixels.
-  if (detector.kind === 'barcode-detector') {
-    const impl = new (window as unknown as { BarcodeDetector: new (o: object) => { detect(s: unknown): Promise<Array<{ rawValue: string }>> } }).BarcodeDetector({ formats: ['qr_code'] });
-    const found = await impl.detect(canvas);
-    return found.length > 0 ? found[0].rawValue : null;
-  }
-  const found = await detector.detect(dummyVideo, grab);
+  // Constructing a BarcodeDetector per call used to fold instance-creation cost
+  // into every timing sample, which understates the decoder's real ceiling.
+  const found = await detector.detect(canvas, grab);
   return found.length > 0 ? found[0] : null;
 }
 
