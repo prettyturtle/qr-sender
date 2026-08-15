@@ -19,3 +19,8 @@
 
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
+
+# Content-addressed by resolution, and only ever fetched at add-to-home-screen
+# time. Not immutable: the artwork can change under a stable filename.
+/splash/*
+  Cache-Control: public, max-age=604800

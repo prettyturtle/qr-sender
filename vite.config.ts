@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['icon.svg', 'icon-192.png', 'icon-512.png'],
+      includeAssets: ['icon.svg', 'icon-192.png', 'icon-512.png', 'icon-512-maskable.png'],
       workbox: {
         // The wasm decoder must be precached: without it, offline receiving
         // fails outright on every browser that lacks BarcodeDetector (iOS Safari
@@ -18,7 +18,11 @@ export default defineConfig({
         // than tripling what every user downloads up front. Receiving, decoding
         // and downloading all work offline regardless; only the first PDF
         // *preview* needs a network.
-        globIgnores: ['**/pdf*.{js,mjs}'],
+        // The iOS launch images are ~940KB across 42 files that only Safari ever
+        // requests, once, at add-to-home-screen time — and iOS holds its own copy
+        // from then on. Precaching them would put that on every user, Android
+        // included, for no offline benefit.
+        globIgnores: ['**/pdf*.{js,mjs}', 'splash/**'],
         runtimeCaching: [
           {
             urlPattern: /\/assets\/pdf.*\.(?:js|mjs)$/,
@@ -44,7 +48,10 @@ export default defineConfig({
         icons: [
           { src: 'icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
           { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-          { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          // Separate art, not the same file twice: a maskable icon can be cropped
+          // to a circle of 80% diameter, which clips the corner finder patterns
+          // off the `any` variant. See scripts/make-icons.mjs.
+          { src: 'icon-512-maskable.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
     }),
