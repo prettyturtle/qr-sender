@@ -23,8 +23,8 @@ import { Receiver, type IntegrityState, type ReceiverProgress } from '../../core
 import { CameraPermissionError, Scanner } from '../../platform/camera.js';
 import { deleteTransfer, listTransfers, saveTransfer, type StoredTransfer } from '../../platform/storage.js';
 import { acquireWakeLock } from '../../platform/wakeLock.js';
-import { formatDuration, formatDurationEn } from '../estimate.js';
-import { useT, type MessageKey } from '../i18n.js';
+
+import { formatDuration, useT, type MessageKey } from '../i18n.js';
 import { useAppStore } from '../store.js';
 import { Viewer } from './Viewer.js';
 
@@ -505,7 +505,7 @@ export function ReceiveView(): JSX.Element {
     // Divide by the measured useful-symbol rate, not the decode rate — a rate of
     // 0 yields Infinity, which the formatter renders as "—" rather than a lie.
     const etaSeconds = remaining / symbolRate;
-    const formatSeconds = locale === 'ko' ? formatDuration : formatDurationEn;
+    const formatSeconds = (seconds: number): string => formatDuration(seconds, locale);
     const percent = Math.round(progress.ratio * 100);
 
     return (

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useT } from './i18n.js';
+import { LOCALES, useT, type Locale } from './i18n.js';
 import { useAppStore } from './store.js';
 import { SendView } from './views/SendView.js';
 import { ReceiveView } from './views/ReceiveView.js';
@@ -47,14 +47,18 @@ export function App(): JSX.Element {
           <h1>{t('app.name')}</h1>
           <p>{t('app.tagline')}</p>
         </div>
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={() => setLocale(locale === 'ko' ? 'en' : 'ko')}
-          aria-label="Toggle language"
+        <select
+          className="lang-select"
+          value={locale}
+          onChange={(event) => setLocale(event.target.value as Locale)}
+          aria-label={t('app.language')}
         >
-          {locale === 'ko' ? 'EN' : '한국어'}
-        </button>
+          {LOCALES.map((l) => (
+            <option key={l.code} value={l.code}>
+              {l.label}
+            </option>
+          ))}
+        </select>
       </header>
 
       <div className="tabs" role="tablist">

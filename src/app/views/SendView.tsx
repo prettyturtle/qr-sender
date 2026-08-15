@@ -17,15 +17,23 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react';
 import QRCode from 'qrcode';
-import { DEFAULT_K, DEFAULT_N, DEFAULT_PROFILE, PLAYBACK_FPS_OPTIONS } from '../../core/params.js';
+import {
+  DEFAULT_N,
+  PLAYBACK_FPS_OPTIONS,
+  chooseProfile,
+  maxKForFps,
+  type QrProfile,
+} from '../../core/params.js';
 import { buildPayload } from '../../core/payload.js';
+import { resolveMime } from '../../core/mime.js';
 import { Emitter } from '../../core/emitter.js';
 import { encode as base44Encode } from '../../core/base44.js';
 import { buildQr, drawQr, type RenderedQr } from '../../platform/qrRender.js';
 import { acquireWakeLock, type WakeLockHandle } from '../../platform/wakeLock.js';
-import { estimateTransfer, formatBytes, formatDuration, formatDurationEn } from '../estimate.js';
-import { useT } from '../i18n.js';
+import { estimateTransfer, formatBytes } from '../estimate.js';
+import { formatDuration, useT } from '../i18n.js';
 import { useAppStore, type PlaybackFps } from '../store.js';
+import { QR_COLORS } from '../palette.js';
 
 /** Filename used when the source is typed text rather than a file. */
 const TEXT_FILENAME = 'message.txt';
@@ -44,13 +52,31 @@ const STAGE_TEXT: CSSProperties = { color: '#444', fontSize: '12px', margin: 0 }
 
 type Source = { kind: 'file'; file: File } | { kind: 'text'; text: string };
 
-type Phase = { kind: 'idle' } | { kind: 'preparing' } | { kind: 'playing'; emitter: Emitter };
+type Phase =
+  | { kind: 'idle' }
+  | { kind: 'preparing' }
+  /** The profile is fixed for the life of a stream: `blockSize` is in every header. */
+  | { kind: 'playing'; emitter: Emitter; profile: QrProfile };
+
+/**
+ * Width the stage will get, computed before it exists so the QR version can be
+ * chosen up front. Mirrors the shell's max-width and padding plus the stage's
+ * own padding.
+ */
+function stageWidthEstimate(): number {
+  const viewport = globalThis.innerWidth ?? 400;
+  return Math.max(MIN_STAGE_CSS_SIZE, Math.min(760, viewport) - 32 - 40);
+}
 
 export function SendView(): JSX.Element {
   const t = useT();
   const locale = useAppStore((s) => s.locale);
   const fps = useAppStore((s) => s.playbackFps);
   const setPlaybackFps = useAppStore((s) => s.setPlaybackFps);
+  const qrColor = useAppStore((s) => s.qrColor);
+  const setQrColor = useAppStore((s) => s.setQrColor);
+  const qrRounded = useAppStore((s) => s.qrRounded);
+  const setQrRounded = useAppStore((s) => s.setQrRounded);
 
   const [file, setFile] = useState<File | null>(null);
   const [text, setText] = useState('');
@@ -62,6 +88,20 @@ export function SendView(): JSX.Element {
   const [fullscreen, setFullscreen] = useState(false);
   const [wakeLockSupported, setWakeLockSupported] = useState(true);
   const [stats, setStats] = useState({ frames: 0, passes: 0 });
+  const [stageWidth, setStageWidth] = useState(stageWidthEstimate);
+
+  // A bigger screen can carry a denser symbol at the same physical module size,
+  // and payload per frame is the largest throughput lever there is.
+  const profile = useMemo(
+    () => chooseProfile(stageWidth, globalThis.devicePixelRatio || 1),
+    [stageWidth],
+  );
+
+  useEffect(() => {
+    const onResize = (): void => setStageWidth(stageWidthEstimate());
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -96,8 +136,8 @@ export function SendView(): JSX.Element {
   }, [source]);
 
   const estimate = useMemo(
-    () => (sourceBytes > 0 ? estimateTransfer(sourceBytes, DEFAULT_PROFILE, DEFAULT_K) : null),
-    [sourceBytes],
+    () => (sourceBytes > 0 ? estimateTransfer(sourceBytes, profile, maxKForFps(fps), fps) : null),
+    [sourceBytes, profile, fps],
   );
 
   const receiveUrl = useMemo(() => {
@@ -105,7 +145,7 @@ export function SendView(): JSX.Element {
     return loc === undefined ? '' : `${loc.origin}${loc.pathname}#receive`;
   }, []);
 
-  const formatSeconds = locale === 'ko' ? formatDuration : formatDurationEn;
+  const formatSeconds = (seconds: number): string => formatDuration(seconds, locale);
 
   /* ─── playback ────────────────────────────────────────────────────────── */
 
@@ -119,8 +159,10 @@ export function SendView(): JSX.Element {
     if (emitter.isStatic) {
       const canvas = mainCanvasRef.current;
       if (canvas !== null) {
-        drawQr(canvas, buildQr(base44Encode(emitter.next()), DEFAULT_PROFILE), {
+        drawQr(canvas, buildQr(base44Encode(emitter.next()), phase.profile), {
           cssSize: stageSizeRef.current,
+          dark: qrColor,
+          rounded: qrRounded,
         });
       }
       return;
@@ -132,12 +174,16 @@ export function SendView(): JSX.Element {
     let last = -1;
     let pending: RenderedQr | null = null;
 
-    const nextFrame = (): RenderedQr => buildQr(base44Encode(emitter.next()), DEFAULT_PROFILE);
+    const nextFrame = (): RenderedQr => buildQr(base44Encode(emitter.next()), phase.profile);
 
     const show = (): void => {
       const canvas = mainCanvasRef.current;
       if (canvas === null) return;
-      drawQr(canvas, pending ?? nextFrame(), { cssSize: stageSizeRef.current });
+      drawQr(canvas, pending ?? nextFrame(), {
+        cssSize: stageSizeRef.current,
+        dark: qrColor,
+        rounded: qrRounded,
+      });
       // One-frame lookahead: build the *next* symbol right after painting so the
       // encode cost lands in the idle tail of the period instead of between the
       // deadline and the paint, where it would show up as playback jitter.
@@ -174,7 +220,7 @@ export function SendView(): JSX.Element {
       cancelAnimationFrame(raf);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [phase, fps]);
+  }, [phase, fps, qrColor, qrRounded]);
 
   /* ─── canvas sizing ───────────────────────────────────────────────────── */
 
@@ -193,8 +239,10 @@ export function SendView(): JSX.Element {
       // redrawn here or a resize would leave it at the old scale.
       const canvas = mainCanvasRef.current;
       if (emitter.isStatic && canvas !== null) {
-        drawQr(canvas, buildQr(base44Encode(emitter.next()), DEFAULT_PROFILE), {
+        drawQr(canvas, buildQr(base44Encode(emitter.next()), phase.profile), {
           cssSize: stageSizeRef.current,
+          dark: qrColor,
+          rounded: qrRounded,
         });
       }
     };
@@ -203,7 +251,7 @@ export function SendView(): JSX.Element {
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [phase, fullscreen]);
+  }, [phase, fullscreen, qrColor, qrRounded]);
 
   /* ─── static onboarding QR ────────────────────────────────────────────── */
 
@@ -314,17 +362,25 @@ export function SendView(): JSX.Element {
 
       const built = await buildPayload({
         name: source.kind === 'file' ? source.file.name : TEXT_FILENAME,
-        mime: source.kind === 'file' ? source.file.type || 'application/octet-stream' : 'text/plain',
+        // `File.type` is empty for a lot of real files; resolving from the bytes
+        // and the name here is what lets the receiver preview them at all.
+        mime:
+          source.kind === 'file'
+            ? resolveMime(source.file.type, source.file.name, data)
+            : 'text/plain',
         data,
         passphrase: usePassphrase ? passphrase : undefined,
-        k: DEFAULT_K,
+        // K is capped by the playback rate: displaying faster shrinks the slowest
+        // receiver's share of each carousel cycle.
+        k: maxKForFps(fps),
         n: DEFAULT_N,
-        blockSize: DEFAULT_PROFILE.blockSize,
+        blockSize: profile.blockSize,
       });
       if (stale()) return;
 
       setPhase({
         kind: 'playing',
+        profile,
         emitter: new Emitter({
           payload: built.payload,
           manifest: built.manifest,
@@ -539,20 +595,54 @@ export function SendView(): JSX.Element {
         {usePassphrase ? t('send.encryptedNotice') : t('send.clearWarning')}
       </p>
 
-      <div className="field">
-        <label htmlFor="send-fps">{t('send.speed')}</label>
-        <select
-          id="send-fps"
-          value={fps}
-          onChange={(event) => setPlaybackFps(Number(event.target.value) as PlaybackFps)}
-        >
-          {PLAYBACK_FPS_OPTIONS.map((option) => (
-            <option key={option} value={option}>
-              {`${option} fps`}
-            </option>
-          ))}
-        </select>
-      </div>
+      <section className="card">
+        <p className="card-title">{t('send.qrStyle')}</p>
+
+        <div className="field">
+          <label htmlFor="send-fps">{t('send.speed')}</label>
+          <select
+            id="send-fps"
+            value={fps}
+            onChange={(event) => setPlaybackFps(Number(event.target.value) as PlaybackFps)}
+          >
+            {PLAYBACK_FPS_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {`${option} fps`}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field" style={{ marginTop: 14 }}>
+          <span id="send-color-label">{t('send.qrColor')}</span>
+          <div className="swatches" role="group" aria-labelledby="send-color-label">
+            {QR_COLORS.map((c) => (
+              <button
+                key={c.hex}
+                type="button"
+                className={qrColor === c.hex ? 'swatch selected' : 'swatch'}
+                style={{ background: c.hex }}
+                aria-label={c.name}
+                aria-pressed={qrColor === c.hex}
+                onClick={() => setQrColor(c.hex)}
+              />
+            ))}
+          </div>
+        </div>
+
+        <label className="switch" style={{ marginTop: 14 }}>
+          <input
+            type="checkbox"
+            checked={qrRounded}
+            onChange={(event) => setQrRounded(event.target.checked)}
+          />
+          <span>{t('send.qrRounded')}</span>
+        </label>
+
+        <p className="mono" style={{ marginTop: 10, marginBottom: 0 }}>
+          {t('send.qrStyleNote')}
+        </p>
+      </section>
 
       {error !== null && (
         <p className="notice danger">
