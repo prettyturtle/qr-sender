@@ -1,3 +1,7 @@
+/* Layout uses logical properties throughout so `dir="rtl"` mirrors it without a
+   separate stylesheet. The one physical value left is the full-bleed centring
+   trick, which is symmetric by construction. */
+
 /* ─── tokens ─────────────────────────────────────────────────────────────── */
 
 :root {
@@ -738,7 +742,7 @@ select:focus-visible,
 .data-table td {
   border-bottom: 1px solid var(--border);
   padding: 7px 10px;
-  text-align: left;
+  text-align: start;
   white-space: nowrap;
 }
 

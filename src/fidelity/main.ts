@@ -67,6 +67,14 @@ root.innerHTML = `
       <pre id="control-log">not run</pre>
     </section>
     <section>
+      <h2>4 &middot; Parallel decode</h2>
+      <div class="row">
+        <button id="run-pool">Run</button>
+        <span id="pool-verdict" class="verdict"></span>
+      </div>
+      <div id="pool-table"></div>
+    </section>
+    <section>
       <h2>3 &middot; Throughput A/B</h2>
       <div class="row">
         <button id="run-bench">Run</button>
@@ -272,6 +280,73 @@ async function runBench(): Promise<void> {
       ? `<p class="sub" style="margin-top:10px">Gap is under 15% — the dual-path decoder is not earning its complexity on this device; a wasm-only build would be simpler.</p>`
       : '');
 }
+
+/**
+ * Measures what the receiving pipeline actually gains from running decoders in
+ * parallel. Serial decoding on one thread was the old ceiling; this shows the
+ * multiple on the device in hand rather than in theory.
+ */
+async function runPool(): Promise<void> {
+  const out = document.getElementById('pool-table')!;
+  const verdict = document.getElementById('pool-verdict')!;
+  out.textContent = 'running…';
+  verdict.textContent = '';
+
+  const { createDecodePool, decodeConcurrency } = await import('../platform/decodePool.js');
+  const text = encode(randomBytes(DEFAULT_PROFILE.frameBytes));
+  render([{ data: text, mode: 'alphanumeric' }], DEFAULT_PROFILE.version);
+
+  const sizes = [1, 2, 4, decodeConcurrency()].filter((v, i, a) => a.indexOf(v) === i).sort((a, b) => a - b);
+  const rows: Array<{ size: number; fps: number; ok: boolean }> = [];
+
+  for (const size of sizes) {
+    const pool = await createDecodePool({ size });
+    // Warm up so wasm instantiation is not counted.
+    await pool.decode(await createImageBitmap(canvas), 800);
+
+    const start = performance.now();
+    let done = 0;
+    let ok = true;
+    const inflight = new Set<Promise<void>>();
+    while (performance.now() - start < 3000) {
+      if (inflight.size >= size) {
+        await Promise.race(inflight);
+        continue;
+      }
+      const bitmap = await createImageBitmap(canvas);
+      const task = pool.decode(bitmap, 800).then((texts) => {
+        if (texts[0] !== text) ok = false;
+        done++;
+      });
+      const wrapped = task.finally(() => inflight.delete(wrapped));
+      inflight.add(wrapped);
+    }
+    await Promise.allSettled(inflight);
+    rows.push({ size, fps: (done * 1000) / (performance.now() - start), ok });
+    pool.close();
+  }
+
+  const base = rows[0];
+  const best = rows.reduce((a, b) => (b.fps > a.fps ? b : a));
+  verdict.className = 'verdict';
+  verdict.textContent = `${(best.fps / base.fps).toFixed(2)}x at ${best.size} workers`;
+
+  out.innerHTML =
+    `<table><tr><th>workers</th><th>decodes/sec</th><th>speedup</th><th>lossless</th></tr>` +
+    rows
+      .map(
+        (r) =>
+          `<tr><td>${r.size}</td><td>${r.fps.toFixed(1)}</td><td>${(r.fps / base.fps).toFixed(2)}x</td>` +
+          `<td class="${r.ok ? 'pass' : 'fail'}">${r.ok ? 'yes' : 'no'}</td></tr>`,
+      )
+      .join('') +
+    `</table><p class="sub" style="margin-top:10px">Cores reported: ${navigator.hardwareConcurrency ?? '?'}</p>`;
+}
+
+document.getElementById('run-pool')!.addEventListener('click', (e) => {
+  (e.target as HTMLButtonElement).disabled = true;
+  void runPool().finally(() => ((e.target as HTMLButtonElement).disabled = false));
+});
 
 document.getElementById('run-fidelity')!.addEventListener('click', (e) => {
   (e.target as HTMLButtonElement).disabled = true;

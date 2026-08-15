@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { DEFAULT_PLAYBACK_FPS, PLAYBACK_FPS_OPTIONS } from '../core/params.js';
 import type { DetectorKind } from '../platform/detect.js';
-import { detectLocale, type Locale } from './i18n.js';
+import { detectLocale, type Locale } from './locales/registry.js';
 import { QR_COLORS } from './palette.js';
 
 export type PlaybackFps = (typeof PLAYBACK_FPS_OPTIONS)[number];

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { LOCALES, useT, type Locale } from './i18n.js';
+import { LOCALES, localeInfo, useT, type Locale } from './i18n.js';
 import { useAppStore } from './store.js';
 import { SendView } from './views/SendView.js';
 import { ReceiveView } from './views/ReceiveView.js';
@@ -37,7 +37,11 @@ export function App(): JSX.Element {
   }, []);
 
   useEffect(() => {
-    document.documentElement.lang = locale;
+    const info = localeInfo(locale);
+    document.documentElement.lang = info.code;
+    // Arabic reverses the whole layout; leaving `dir` at ltr would mirror
+    // nothing and read as broken rather than translated.
+    document.documentElement.dir = info.dir;
   }, [locale]);
 
   return (

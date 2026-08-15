@@ -49,6 +49,9 @@ export default defineConfig({
       },
     }),
   ],
+  // The decode pool declares `type: 'module'` workers, so the worker output
+  // format has to match rather than defaulting to IIFE.
+  worker: { format: 'es' },
   build: {
     target: 'es2022',
     sourcemap: true,

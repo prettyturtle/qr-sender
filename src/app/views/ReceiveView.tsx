@@ -20,7 +20,7 @@ import { sanitizeFilename } from '../../core/filename.js';
 import type { Manifest } from '../../core/manifest.js';
 import { openPayload, WrongPassphraseError } from '../../core/payload.js';
 import { Receiver, type IntegrityState, type ReceiverProgress } from '../../core/receiver.js';
-import { CameraPermissionError, Scanner } from '../../platform/camera.js';
+import { CameraPermissionError, Scanner, type ScannerStats } from '../../platform/camera.js';
 import { deleteTransfer, listTransfers, saveTransfer, type StoredTransfer } from '../../platform/storage.js';
 import { acquireWakeLock } from '../../platform/wakeLock.js';
 
@@ -128,6 +128,7 @@ export function ReceiveView(): JSX.Element {
   const lastReadAtRef = useRef(0);
   /** (timestamp, symbols accepted) pairs — see RATE_WINDOW_MS. */
   const rateSamplesRef = useRef<Array<{ at: number; received: number }>>([]);
+  const statsRef = useRef<ScannerStats | null>(null);
 
   const lastSaveAtRef = useRef(0);
   const lastSaveRatioRef = useRef(0);
@@ -145,6 +146,7 @@ export function ReceiveView(): JSX.Element {
   const [peakFps, setPeakFps] = useState(0);
   /** Useful symbols per second, measured. 0 means "not enough data yet". */
   const [symbolRate, setSymbolRate] = useState(0);
+  const [engine, setEngine] = useState('');
   const [silent, setSilent] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [otherStream, setOtherStream] = useState(false);
@@ -223,8 +225,9 @@ export function ReceiveView(): JSX.Element {
     if (result !== 'invalid') lastReadAtRef.current = Date.now();
   }, []);
 
-  const handleStats = useCallback((fps: number): void => {
-    samplesRef.current.push({ at: Date.now(), fps });
+  const handleStats = useCallback((stats: ScannerStats): void => {
+    samplesRef.current.push({ at: Date.now(), fps: stats.decodeFps });
+    statsRef.current = stats;
   }, []);
 
   // Publisher: the only place receiver state crosses into React.
@@ -251,6 +254,10 @@ export function ReceiveView(): JSX.Element {
       const avg = samples.length === 0 ? 0 : samples.reduce((sum, s) => sum + s.fps, 0) / samples.length;
       setDecodeFps((prev) => (Math.abs(prev - avg) < 0.05 ? prev : avg));
       setPeakFps((prev) => (avg > prev ? avg : prev));
+
+      const hw = statsRef.current;
+      const label = hw === null ? '' : `${hw.detector === 'barcode-detector' ? 'native' : 'wasm'} ×${hw.concurrency}`;
+      setEngine((prev) => (prev === label ? prev : label));
       setSilent(now - lastReadAtRef.current >= SILENT_MS);
 
       const rateSamples = rateSamplesRef.current.filter((s) => now - s.at <= RATE_WINDOW_MS);
@@ -307,7 +314,7 @@ export function ReceiveView(): JSX.Element {
     void Scanner.start({
       video,
       onText: handleText,
-      onStats: (stats) => handleStats(stats.decodeFps),
+      onStats: handleStats,
       ...(detectorPreference !== null ? { force: detectorPreference } : {}),
     })
       .then((scanner) => {
@@ -369,6 +376,8 @@ export function ReceiveView(): JSX.Element {
     setFileName(r.manifest?.name ?? null);
     setDecodeFps(0);
     setPeakFps(0);
+    setEngine('');
+    statsRef.current = null;
     setSilent(false);
     setOtherStream(false);
     setTooLarge(false);
@@ -546,6 +555,10 @@ export function ReceiveView(): JSX.Element {
               <div className="stat">
                 <dt>{t('recv.rate')}</dt>
                 <dd>{decodeFps.toFixed(1)} fps</dd>
+              </div>
+              <div className="stat">
+                <dt>{t('common.detector')}</dt>
+                <dd style={{ fontSize: 13 }}>{engine}</dd>
               </div>
               <div className="stat">
                 <dt>{t('recv.remaining')}</dt>

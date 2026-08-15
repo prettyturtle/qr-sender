@@ -1,48 +1,55 @@
 /**
  * Camera capture and the scan loop.
  *
- * Two things here matter for decode rate more than anything else in the app:
+ * Receiving is throughput-bound on distinct frames decoded per second, and three
+ * things decide that number:
  *
- *  - **Centre-square ROI + downscale.** A 1080p full-frame readback into wasm is
- *    several times slower than an 800px centre crop, and the QR only ever
- *    occupies the middle of the viewfinder anyway.
- *  - **No overlapping decodes.** Queuing a second decode before the first
- *    returns just builds latency; the next camera frame is always more useful
- *    than a stale one.
+ *  - **Parallel decoding.** Decodes run several at a time through `DecodePool`,
+ *    on worker threads where the decoder is wasm. Decoding serially on the main
+ *    thread capped the whole app at one-over-decode-latency, which is where the
+ *    old ~8fps ceiling came from.
+ *  - **One capture per camera frame.** `requestVideoFrameCallback` fires exactly
+ *    when a new frame exists, so nothing is decoded twice and nothing is missed.
+ *    `requestAnimationFrame` is tied to the display instead and does both.
+ *  - **Cropping on the compositor.** `createImageBitmap` crops the centre square
+ *    off-thread and transfers without copying, so the main thread never touches
+ *    pixel data.
  */
 
-import { createDetector, type DetectorKind, type FrameDetector } from './detect.js';
+import { createDecodePool, decodeConcurrency, type DecodePool } from './decodePool.js';
+import type { DetectorKind } from './detect.js';
 
 export interface ScannerStats {
-  /** Frames the detector was run on, per second. */
+  /** Frames the decoder was run on, per second. */
   attemptFps: number;
-  /** Frames that yielded at least one QR, per second — the number the coaching UI reacts to. */
+  /** Frames that yielded a QR, per second — the number the coaching UI reacts to. */
   decodeFps: number;
   detector: DetectorKind;
   resolution: string;
-  /** Edge length currently handed to the detector — see the ROI note below. */
+  /** Edge length currently handed to the decoder. */
   roi: number;
+  /** How many decodes may run at once. */
+  concurrency: number;
+  /** Mean decoder latency in milliseconds. */
+  latencyMs: number;
 }
 
 /**
- * Default region handed to the detector: a centre square crop.
+ * Default region handed to the decoder: a centre square crop.
  *
- * A square crop discards the parts of a landscape frame that a square symbol
- * never occupies, which both speeds up the search and keeps every pixel spent on
- * the symbol itself. Scaling the whole frame instead was tried while the sender
- * tiled several symbols; tiling did not survive contact with a real camera, and
- * the whole-frame crop cost pixels per module for nothing.
+ * A square crop discards the parts of a landscape frame a square symbol never
+ * occupies, which both speeds up the search and keeps every pixel spent on the
+ * symbol itself.
  */
 const ROI_FAST = 800;
 
 /**
  * Escalated region, used when nothing is decoding.
  *
- * The opposite case — a webcam reading a *phone* screen — is resolution-starved
- * rather than CPU-starved. A 125-module symbol on a 6cm phone screen is about
- * 0.5mm per module, so downscaling 1080p to 800 costs roughly a quarter of the
- * working distance at exactly the moment it is scarcest. Desktop targets 6fps
- * and has the headroom, so when reads stop we trade speed for pixels.
+ * A webcam reading a *phone* screen is resolution-starved rather than
+ * CPU-starved: a 125-module symbol on a 6cm screen is about 0.5mm per module, so
+ * downscaling costs roughly a quarter of the working distance at exactly the
+ * moment it is scarcest.
  */
 const ROI_HIGH = 1440;
 
@@ -57,6 +64,8 @@ export interface ScannerOptions {
   force?: DetectorKind;
   /** Overrides the adaptive region sizing. Used by benchmarks, not by the app. */
   roiSize?: number;
+  /** Overrides the pool size. Used by benchmarks. */
+  concurrency?: number;
 }
 
 export class CameraPermissionError extends Error {
@@ -74,14 +83,23 @@ function classifyMediaError(err: unknown): CameraPermissionError {
   return new CameraPermissionError('unknown');
 }
 
+/**
+ * `requestVideoFrameCallback` is in the DOM lib but not in every browser, so it
+ * is reached through an optional shape rather than assumed present.
+ */
+interface FrameCallbackCapable {
+  requestVideoFrameCallback?: (cb: () => void) => number;
+  cancelVideoFrameCallback?: (handle: number) => void;
+}
+
 export class Scanner {
   private stream: MediaStream | null = null;
-  private detector: FrameDetector | null = null;
-  private raf = 0;
+  private pool: DecodePool | null = null;
+  private handle = 0;
+  private usingFrameCallback = false;
   private stopped = false;
-  private busy = false;
-  private work = document.createElement('canvas');
-  private ctx: CanvasRenderingContext2D | null = null;
+  /** Bitmap creation is async too, so it counts against the pool budget. */
+  private grabbing = 0;
 
   private attempts = 0;
   private decodes = 0;
@@ -94,6 +112,8 @@ export class Scanner {
     detector: 'zxing-wasm',
     resolution: '',
     roi: ROI_FAST,
+    concurrency: 1,
+    latencyMs: 0,
   };
 
   private constructor(private readonly opts: ScannerOptions) {}
@@ -105,7 +125,7 @@ export class Scanner {
   }
 
   get detectorKind(): DetectorKind {
-    return this.detector?.kind ?? 'zxing-wasm';
+    return this.pool?.kind ?? 'zxing-wasm';
   }
 
   private async init(): Promise<void> {
@@ -118,8 +138,8 @@ export class Scanner {
           facingMode: { ideal: 'environment' },
           width: { ideal: 1920 },
           height: { ideal: 1080 },
-          // 60 where the hardware offers it: the two-camera-frame hold is what
-          // caps playback speed, so a faster camera directly raises the ceiling.
+          // 60 where the hardware offers it: every camera frame is a chance to
+          // decode a distinct symbol.
           frameRate: { ideal: 60 },
         },
         audio: false,
@@ -134,70 +154,97 @@ export class Scanner {
     video.muted = true;
     await video.play();
 
-    this.detector = await createDetector(this.opts.force ? { force: this.opts.force } : {});
-    this.stats.detector = this.detector.kind;
+    this.pool = await createDecodePool({
+      ...(this.opts.force !== undefined ? { force: this.opts.force } : {}),
+      size: this.opts.concurrency ?? decodeConcurrency(),
+    });
+    this.stats.detector = this.pool.kind;
+    this.stats.concurrency = this.pool.concurrency;
 
     const track = this.stream.getVideoTracks()[0];
     const settings = track?.getSettings();
     this.stats.resolution = settings ? `${settings.width ?? '?'}x${settings.height ?? '?'}` : '';
 
-    this.ctx = this.work.getContext('2d', { alpha: false, willReadFrequently: true });
     this.windowStart = performance.now();
     this.lastDecodeAt = Date.now();
-    this.loop();
+    this.schedule();
   }
 
-  private loop = (): void => {
+  /** One callback per camera frame where the browser offers it, per repaint otherwise. */
+  private schedule(): void {
     if (this.stopped) return;
-    this.raf = requestAnimationFrame(this.loop);
-    if (this.busy) return;
+    const video = this.opts.video as HTMLVideoElement & FrameCallbackCapable;
+    if (typeof video.requestVideoFrameCallback === 'function') {
+      this.usingFrameCallback = true;
+      this.handle = video.requestVideoFrameCallback(this.tick);
+    } else {
+      this.usingFrameCallback = false;
+      this.handle = requestAnimationFrame(this.tick);
+    }
+  }
 
+  private tick = (): void => {
+    if (this.stopped) return;
+    this.schedule();
+
+    const pool = this.pool;
     const video = this.opts.video;
+    if (pool === null) return;
     if (video.readyState < 2 || video.videoWidth === 0) return;
+    // Every slot busy: the next camera frame is more useful than a queued one.
+    if (pool.inFlight + this.grabbing >= pool.concurrency) return;
 
-    this.busy = true;
-    void this.tick().finally(() => {
-      this.busy = false;
-    });
+    const side = Math.min(video.videoWidth, video.videoHeight);
+    const sx = (video.videoWidth - side) / 2;
+    const sy = (video.videoHeight - side) / 2;
+    const roi = this.targetRoi();
+
+    this.grabbing++;
+    void createImageBitmap(video, sx, sy, side, side)
+      .then(async (bitmap) => {
+        this.grabbing--;
+        if (this.stopped) {
+          bitmap.close();
+          return;
+        }
+        const texts = await pool.decode(bitmap, roi);
+        this.attempts++;
+        if (texts.length > 0) {
+          this.decodes++;
+          this.lastDecodeAt = Date.now();
+          for (const t of texts) this.opts.onText(t);
+        }
+        this.report();
+      })
+      .catch((err: unknown) => {
+        this.grabbing--;
+        this.opts.onError?.(err);
+      });
   };
 
-  private async tick(): Promise<void> {
-    const detector = this.detector;
-    if (detector === null) return;
-
-    try {
-      const texts = await detector.detect(this.drawCrop(), () => this.readBack());
-      this.attempts++;
-      if (texts.length > 0) {
-        this.decodes++;
-        this.lastDecodeAt = Date.now();
-        for (const t of texts) this.opts.onText(t);
-      }
-    } catch (err) {
-      this.opts.onError?.(err);
-    }
-
+  private report(): void {
     const now = performance.now();
     const elapsed = now - this.windowStart;
-    if (elapsed >= 1000) {
-      // Nothing is decoding: alternate between the two region sizes rather than
-      // guessing which resource is short. One of them is usually right, and
-      // trying both beats picking wrong and never recovering.
-      if (Date.now() - this.lastDecodeAt >= ROI_SWITCH_MS) {
-        this.highRoi = !this.highRoi;
-        this.lastDecodeAt = Date.now();
-      }
-      this.stats = {
-        ...this.stats,
-        attemptFps: (this.attempts * 1000) / elapsed,
-        decodeFps: (this.decodes * 1000) / elapsed,
-        roi: this.targetRoi(),
-      };
-      this.attempts = 0;
-      this.decodes = 0;
-      this.windowStart = now;
-      this.opts.onStats?.(this.stats);
+    if (elapsed < 1000) return;
+
+    // Nothing is decoding: alternate between the two region sizes rather than
+    // guessing which resource is short.
+    if (Date.now() - this.lastDecodeAt >= ROI_SWITCH_MS) {
+      this.highRoi = !this.highRoi;
+      this.lastDecodeAt = Date.now();
     }
+
+    this.stats = {
+      ...this.stats,
+      attemptFps: (this.attempts * 1000) / elapsed,
+      decodeFps: (this.decodes * 1000) / elapsed,
+      roi: this.targetRoi(),
+      latencyMs: this.pool?.latencyMs ?? 0,
+    };
+    this.attempts = 0;
+    this.decodes = 0;
+    this.windowStart = now;
+    this.opts.onStats?.(this.stats);
   }
 
   private targetRoi(): number {
@@ -205,40 +252,13 @@ export class Scanner {
     return this.highRoi ? ROI_HIGH : ROI_FAST;
   }
 
-  /** Centre square of the viewfinder, downscaled — the detector never sees more than it needs. */
-  private drawCrop(): HTMLCanvasElement {
-    const video = this.opts.video;
-    const side = Math.min(video.videoWidth, video.videoHeight);
-    const out = Math.min(this.targetRoi(), side);
-
-    if (this.work.width !== out || this.work.height !== out) {
-      this.work.width = out;
-      this.work.height = out;
-    }
-    this.ctx!.drawImage(
-      video,
-      (video.videoWidth - side) / 2,
-      (video.videoHeight - side) / 2,
-      side,
-      side,
-      0,
-      0,
-      out,
-      out,
-    );
-    return this.work;
-  }
-
-  /** Only the wasm backend needs the pixels; the native one reads the canvas directly. */
-  private readBack(): ImageData {
-    return this.ctx!.getImageData(0, 0, this.work.width, this.work.height);
-  }
-
   stop(): void {
     this.stopped = true;
-    cancelAnimationFrame(this.raf);
-    this.detector?.close();
-    this.detector = null;
+    const video = this.opts.video as HTMLVideoElement & FrameCallbackCapable;
+    if (this.usingFrameCallback) video.cancelVideoFrameCallback?.(this.handle);
+    else cancelAnimationFrame(this.handle);
+    this.pool?.close();
+    this.pool = null;
     for (const track of this.stream?.getTracks() ?? []) track.stop();
     this.stream = null;
     this.opts.video.srcObject = null;
