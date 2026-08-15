@@ -14,11 +14,12 @@
  */
 
 import { packFrame, type FrameHeader } from './frame.js';
-import { encodeManifest, type Manifest } from './manifest.js';
+import { encodeManifest, encodeManifestPrefixed, type Manifest } from './manifest.js';
 import {
   BURST,
   FLAG_COMPRESSED,
   FLAG_ENCRYPTED,
+  FLAG_INLINE,
   FLAG_MANIFEST,
   MANIFEST_INDEX,
   MANIFEST_INTERVAL,
@@ -74,6 +75,8 @@ export class Emitter {
   private readonly payload: Uint8Array;
   private readonly manifestFrame: Uint8Array;
   private readonly flags: number;
+  /** Set when the whole transfer fits in one frame — see `isStatic`. */
+  private readonly inlineFrame: Uint8Array | null;
 
   private readonly order: Uint32Array;
   private readonly segBuf: Uint8Array;
@@ -109,6 +112,21 @@ export class Emitter {
       encodeManifest(opts.manifest, opts.blockSize),
     );
 
+    // If the manifest and the entire payload fit in one frame, there is nothing
+    // to schedule: emit a single still symbol forever. Animating a twenty-byte
+    // message across ninety-six frames of mostly zero padding — ten seconds to
+    // move twenty bytes — is the wrong answer to the small case.
+    const prefixed = encodeManifestPrefixed(opts.manifest);
+    this.inlineFrame =
+      this.segCount === 1 && opts.k === 1 && prefixed.length + opts.payload.length <= opts.blockSize
+        ? (() => {
+            const body = new Uint8Array(opts.blockSize);
+            body.set(prefixed, 0);
+            body.set(opts.payload, prefixed.length);
+            return packFrame(this.headerFor(0, 0, this.flags | FLAG_INLINE), body);
+          })()
+        : null;
+
     this.order = new Uint32Array(this.segCount);
     for (let i = 0; i < this.segCount; i++) this.order[i] = i;
     shuffleInto(this.order, 0);
@@ -117,12 +135,24 @@ export class Emitter {
     this.symBuf = new Uint8Array(opts.blockSize);
   }
 
+  /**
+   * True when the transfer is a single still QR rather than an animation.
+   * The UI stops the playback loop entirely in that case.
+   */
+  get isStatic(): boolean {
+    return this.inlineFrame !== null;
+  }
+
   /** Bytes the sender keeps resident regardless of payload size. */
   get residentBytes(): number {
     return this.segBuf.byteLength + this.symBuf.byteLength + this.manifestFrame.byteLength;
   }
 
   next(): Uint8Array {
+    if (this.inlineFrame !== null) {
+      this.framesEmitted++;
+      return this.inlineFrame;
+    }
     if (this.sinceManifest >= MANIFEST_INTERVAL) {
       this.sinceManifest = 0;
       this.framesEmitted++;

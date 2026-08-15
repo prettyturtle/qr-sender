@@ -9,7 +9,7 @@
 import { unwrapEnvelope, wrapEnvelope, type Envelope } from './envelope.js';
 import { segmentCountFor } from './emitter.js';
 import type { Manifest } from './manifest.js';
-import { MAX_RECEIVE_BYTES, MIN_COMPRESSION_GAIN, PBKDF2_ITERATIONS } from './params.js';
+import { chooseK, MAX_RECEIVE_BYTES, MIN_COMPRESSION_GAIN, PBKDF2_ITERATIONS } from './params.js';
 import { sha256Hex } from './sha256.js';
 
 export interface BuildPayloadOptions {
@@ -17,6 +17,7 @@ export interface BuildPayloadOptions {
   mime: string;
   data: Uint8Array;
   passphrase?: string;
+  /** Upper bound on source symbols; the actual K is derived from the payload. */
   k: number;
   n: number;
   blockSize: number;
@@ -143,14 +144,17 @@ export async function buildPayload(opts: BuildPayloadOptions): Promise<BuiltPayl
   const streamId =
     opts.streamId !== undefined ? opts.streamId >>> 0 : crypto.getRandomValues(new Uint32Array(1))[0] >>> 0;
 
+  // K is chosen only now, from the size the payload actually ended up.
+  const k = chooseK(body.length, opts.blockSize, opts.k);
+
   const manifest: Manifest = {
     v: 1,
     size: body.length,
     hash: sha256Hex(body),
-    k: opts.k,
+    k,
     n: opts.n,
     blockSize: opts.blockSize,
-    segCount: segmentCountFor(body.length, opts.k, opts.blockSize),
+    segCount: segmentCountFor(body.length, k, opts.blockSize),
     compressed,
     encrypted,
     ...(encrypted ? { kdf, iv } : { name: opts.name, mime: opts.mime, plainSize: opts.data.length }),

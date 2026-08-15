@@ -22,6 +22,7 @@
 
 import { crc32 } from './crc32.js';
 import {
+  FLAG_INLINE,
   FLAG_MANIFEST,
   HEADER_SIZE,
   MAGIC_0,
@@ -47,6 +48,8 @@ export interface ParsedFrame {
   header: FrameHeader;
   payload: Uint8Array;
   isManifest: boolean;
+  /** The frame carries its own manifest and is the whole transfer. */
+  isInline: boolean;
 }
 
 export function packFrame(header: FrameHeader, payload: Uint8Array): Uint8Array {
@@ -105,12 +108,20 @@ export function unpackFrame(buf: Uint8Array): ParsedFrame | null {
   if (buf.length !== HEADER_SIZE + header.blockSize) return null;
 
   const isManifest = (header.flags & FLAG_MANIFEST) !== 0;
+  const isInline = (header.flags & FLAG_INLINE) !== 0;
+  if (isManifest && isInline) return null;
+
   if (isManifest) {
     if (header.segIndex !== MANIFEST_INDEX || header.symIndex !== MANIFEST_INDEX) return null;
   } else {
     if (header.segIndex >= header.segCount) return null;
     if (header.symIndex >= header.n) return null;
+    // A single-frame transfer is exactly one block at index zero; anything else
+    // claiming the flag is malformed.
+    if (isInline && (header.segCount !== 1 || header.k !== 1 || header.segIndex !== 0 || header.symIndex !== 0)) {
+      return null;
+    }
   }
 
-  return { header, payload: buf.subarray(HEADER_SIZE), isManifest };
+  return { header, payload: buf.subarray(HEADER_SIZE), isManifest, isInline };
 }

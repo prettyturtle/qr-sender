@@ -109,6 +109,21 @@ export const MANIFEST_INDEX = 0xffff;
 export const FLAG_MANIFEST = 1 << 0;
 export const FLAG_COMPRESSED = 1 << 1;
 export const FLAG_ENCRYPTED = 1 << 2;
+/** The frame carries its manifest inline and is the entire transfer. */
+export const FLAG_INLINE = 1 << 3;
+
+/**
+ * Source symbols for a payload of `length` bytes.
+ *
+ * K is a ceiling, not a constant. Padding a 20-byte message out to 96 blocks
+ * would broadcast 95 blocks of zeroes and make the receiver collect all of them
+ * before it could finish — ten seconds to move twenty bytes. Sizing K to the
+ * payload makes every transfer under one segment proportional to its actual
+ * content, and `r_min * N >= K` still holds trivially because K only shrinks.
+ */
+export function chooseK(length: number, blockSize: number, maxK: number = DEFAULT_K): number {
+  return Math.min(maxK, Math.max(1, Math.ceil(length / blockSize)));
+}
 
 export function assertParams(k: number, n: number): void {
   if (k < 1 || k > 255) throw new Error(`invalid K: ${k}`);

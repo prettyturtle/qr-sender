@@ -112,6 +112,20 @@ export function SendView(): JSX.Element {
   useEffect(() => {
     if (phase.kind !== 'playing') return;
     const emitter = phase.emitter;
+
+    // A transfer that fits in one frame has nothing to animate. Draw it once and
+    // leave it on screen — no timer, no repaint, and any scanner gets it in a
+    // single glance.
+    if (emitter.isStatic) {
+      const canvas = mainCanvasRef.current;
+      if (canvas !== null) {
+        drawQr(canvas, buildQr(base44Encode(emitter.next()), DEFAULT_PROFILE), {
+          cssSize: stageSizeRef.current,
+        });
+      }
+      return;
+    }
+
     const interval = 1000 / fps;
 
     let raf = 0;
@@ -169,11 +183,20 @@ export function SendView(): JSX.Element {
     const el = stageRef.current;
     if (el === null) return;
 
+    const emitter = phase.emitter;
     const measure = (): void => {
       const width = el.clientWidth - 40;
       // Only fullscreen constrains height; in flow the stage grows to fit.
       const limit = fullscreen ? Math.min(width, el.clientHeight - STAGE_CHROME_PX) : width;
       stageSizeRef.current = Math.max(MIN_STAGE_CSS_SIZE, Math.floor(limit));
+      // The animated path repaints on its own each tick; a still frame has to be
+      // redrawn here or a resize would leave it at the old scale.
+      const canvas = mainCanvasRef.current;
+      if (emitter.isStatic && canvas !== null) {
+        drawQr(canvas, buildQr(base44Encode(emitter.next()), DEFAULT_PROFILE), {
+          cssSize: stageSizeRef.current,
+        });
+      }
     };
 
     measure();
@@ -306,9 +329,10 @@ export function SendView(): JSX.Element {
           payload: built.payload,
           manifest: built.manifest,
           streamId: built.streamId,
-          k: DEFAULT_K,
-          n: DEFAULT_N,
-          blockSize: DEFAULT_PROFILE.blockSize,
+          // K is derived from the finished payload, not fixed at the ceiling.
+          k: built.manifest.k,
+          n: built.manifest.n,
+          blockSize: built.manifest.blockSize,
         }),
       });
     } catch (cause) {

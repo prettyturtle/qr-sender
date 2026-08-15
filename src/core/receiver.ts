@@ -145,6 +145,34 @@ export class Receiver {
       return 'invalid';
     }
 
+    if (parsed.isInline) {
+      // One frame carrying its own manifest and the whole payload. Completing on
+      // the first read is the entire point: a short message should behave like a
+      // still QR, not like a ten-second animation.
+      if (this.done[0] === 1) return 'duplicate';
+      const view = new DataView(parsed.payload.buffer, parsed.payload.byteOffset, parsed.payload.byteLength);
+      const jsonLen = view.getUint16(0);
+      const m = decodeManifest(parsed.payload);
+      if (m === null || m.k !== 1 || m.n !== this.n || m.segCount !== 1 || m.blockSize !== this.blockSize) {
+        this.framesRejected++;
+        return 'invalid';
+      }
+      const data = parsed.payload.subarray(2 + jsonLen);
+      if (m.size > data.length) {
+        this.framesRejected++;
+        return 'invalid';
+      }
+      this.manifest = m;
+      this.buffer.set(data.subarray(0, m.size), 0);
+      this.present[0] = 1;
+      this.seen[0] = 1;
+      this.counts[0] = 1;
+      this.done[0] = 1;
+      this.segmentsDone = 1;
+      this.framesAccepted++;
+      return 'ok';
+    }
+
     if (parsed.isManifest) {
       if (this.manifest !== null) return 'duplicate';
       const m = decodeManifest(parsed.payload);

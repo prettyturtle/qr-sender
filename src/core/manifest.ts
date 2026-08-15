@@ -45,18 +45,26 @@ const dec = new TextDecoder();
  */
 export const MIN_BLOCK_SIZE_FOR_MANIFEST = 512;
 
+/** `[u16 length][json]`, unpadded — the form a single-frame transfer embeds. */
+export function encodeManifestPrefixed(manifest: Manifest): Uint8Array {
+  const json = enc.encode(JSON.stringify(manifest));
+  const out = new Uint8Array(2 + json.length);
+  new DataView(out.buffer).setUint16(0, json.length);
+  out.set(json, 2);
+  return out;
+}
+
 /** Serialise into a fixed `blockSize` payload: `[u16 length][json][zero padding]`. */
 export function encodeManifest(manifest: Manifest, blockSize: number): Uint8Array {
-  const json = enc.encode(JSON.stringify(manifest));
-  if (json.length + 2 > blockSize) {
+  const prefixed = encodeManifestPrefixed(manifest);
+  if (prefixed.length > blockSize) {
     throw new Error(
-      `manifest too large: ${json.length + 2} > blockSize ${blockSize}. ` +
+      `manifest too large: ${prefixed.length} > blockSize ${blockSize}. ` +
         `blockSize must be at least ${MIN_BLOCK_SIZE_FOR_MANIFEST}.`,
     );
   }
   const out = new Uint8Array(blockSize);
-  new DataView(out.buffer).setUint16(0, json.length);
-  out.set(json, 2);
+  out.set(prefixed, 0);
   return out;
 }
 
