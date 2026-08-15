@@ -525,14 +525,27 @@ select:focus-visible,
 
 /* The QR itself is always pure black on pure white regardless of theme —
    inverting it costs detection rate on every camera. */
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+}
+
 .qr-stage {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 0;
   background: #fff;
   border-radius: var(--radius);
-  padding: 20px;
+  /* The white around the symbol is its quiet zone, not decoration — but the
+     painter already draws one, so this only needs to keep the card's rounded
+     corners off the modules. */
+  padding: 8px;
 }
 
 .qr-stage canvas {
@@ -562,18 +575,31 @@ select:focus-visible,
 
 /* Floated, not stacked: every row of pixels the controls would occupy is a row
    the symbol loses, and the symbol is the thing being photographed. */
-.qr-stage.fullscreen .btn-row {
-  position: absolute;
-  right: 12px;
-  bottom: 12px;
+.qr-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.qr-controls .btn-row {
   margin: 0;
   gap: 8px;
+}
+
+.qr-controls.fullscreen {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 51;
+  margin: 0;
   opacity: 0.55;
   transition: opacity 0.15s;
 }
 
-.qr-stage.fullscreen .btn-row:hover,
-.qr-stage.fullscreen .btn-row:focus-within {
+.qr-controls.fullscreen:hover,
+.qr-controls.fullscreen:focus-within {
   opacity: 1;
 }
 
@@ -594,6 +620,43 @@ select:focus-visible,
   object-fit: cover;
   display: block;
 }
+
+.focus-meter {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 45%);
+  color: #fff;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.focus-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 25%);
+  overflow: hidden;
+}
+
+.focus-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.12s linear, background-color 0.2s;
+}
+
+/* Colour carries the verdict so the bar can be read at a glance while the user
+   is moving the phone and cannot also be reading a sentence. */
+.focus-meter.poor .focus-fill { background: #e5484d; }
+.focus-meter.fair .focus-fill { background: #f5a524; }
+.focus-meter.good .focus-fill { background: #30a46c; }
+.focus-meter.unknown .focus-fill { background: rgb(255 255 255 / 60%); }
 
 .viewfinder .reticle {
   position: absolute;

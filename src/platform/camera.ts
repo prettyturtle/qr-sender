@@ -23,6 +23,7 @@ import {
   type SymbolBox,
 } from './decodePool.js';
 import type { DetectorKind } from './detect.js';
+import { createSharpnessMeter, type SharpnessMeter } from './sharpness.js';
 
 export interface ScannerStats {
   /** Frames the decoder was run on, per second. */
@@ -37,6 +38,10 @@ export interface ScannerStats {
   cropFraction: number;
   /** Current ISP zoom, or 0 where the camera does not offer it. */
   zoom: number;
+  /** Focus quality of the tracked region, 0..1, or -1 before the first reading. */
+  sharpness: number;
+  /** True where the camera exposes no continuous autofocus — most PC webcams. */
+  fixedFocus: boolean;
   /** Frame rate the camera actually settled on, which caps safe playback rates. */
   cameraFps: number;
   /** How many decodes may run at once. */
@@ -98,6 +103,14 @@ const ZOOM_DEADBAND = 0.12;
 
 /** Seconds between zoom corrections, so autofocus is not thrashed. */
 const ZOOM_INTERVAL_MS = 1200;
+
+/**
+ * Measure focus every Nth frame.
+ *
+ * Focus changes at the speed of a hand, not a frame, so measuring every frame
+ * would spend real time to track something that cannot move that fast.
+ */
+const SHARPNESS_EVERY = 6;
 
 export interface ScannerOptions {
   video: HTMLVideoElement;
@@ -164,6 +177,9 @@ export class Scanner {
   private zoomRange: { min: number; max: number; step: number } | null = null;
   private zoomValue = 1;
   private lastZoomAt = 0;
+  private meter: SharpnessMeter | null = null;
+  private frameCount = 0;
+  private sharpness = -1;
   private stats: ScannerStats = {
     attemptFps: 0,
     decodeFps: 0,
@@ -172,6 +188,8 @@ export class Scanner {
     roi: ROI_NATIVE,
     cropFraction: 1,
     zoom: 0,
+    sharpness: -1,
+    fixedFocus: false,
     cameraFps: 0,
     concurrency: 1,
     latencyMs: 0,
@@ -225,6 +243,8 @@ export class Scanner {
     const track = this.stream.getVideoTracks()[0] ?? null;
     this.zoomTrack = track;
     this.readZoomRange(track);
+    this.requestAutofocus(track);
+    this.meter = createSharpnessMeter();
     const settings = track?.getSettings();
     this.stats.resolution = settings ? `${settings.width ?? '?'}x${settings.height ?? '?'}` : '';
     // The playback rate a sender can safely use is capped by this: each symbol
@@ -263,6 +283,16 @@ export class Scanner {
     const crop = this.cropRegion(video);
     const { sx, sy, side } = crop;
     if (side < 1) return;
+
+    // Measured on the crop, so it reports the symbol's focus rather than the
+    // scene's: a sharp desk behind a soft phone must not read as "in focus".
+    if (this.meter !== null && ++this.frameCount % SHARPNESS_EVERY === 0) {
+      const score = this.meter.measure(video, sx, sy, side);
+      if (score >= 0) {
+        // Lightly smoothed: an unsmoothed readout jitters too much to aim by.
+        this.sharpness = this.sharpness < 0 ? score : this.sharpness + (score - this.sharpness) * 0.3;
+      }
+    }
     const roi = this.targetRoi();
 
     this.grabbing++;
@@ -322,6 +352,7 @@ export class Scanner {
       roi: this.targetRoi(),
       cropFraction: this.lastCropFraction,
       zoom: this.zoomRange === null ? 0 : this.zoomValue,
+      sharpness: this.sharpness,
       latencyMs: this.pool?.latencyMs ?? 0,
     };
     this.attempts = 0;
@@ -376,6 +407,31 @@ export class Scanner {
     };
     const frameShort = Math.min(this.opts.video.videoWidth, this.opts.video.videoHeight);
     if (frameShort > 0) this.adjustZoom(this.track.size / frameShort);
+  }
+
+  /**
+   * Ask for continuous autofocus where the camera has any.
+   *
+   * Phones default to it already; the call matters for the cameras that support
+   * focus but start in a single-shot or manual mode. Where the capability is
+   * absent the lens is fixed and no amount of asking will move it — that is the
+   * case the sharpness meter exists for.
+   */
+  private requestAutofocus(track: MediaStreamTrack | null): void {
+    if (track === null || typeof track.getCapabilities !== 'function') return;
+    try {
+      const caps = track.getCapabilities() as MediaTrackCapabilities & { focusMode?: string[] };
+      const modes = caps.focusMode ?? [];
+      this.stats = { ...this.stats, fixedFocus: !modes.includes('continuous') };
+      if (!modes.includes('continuous')) return;
+      void track
+        .applyConstraints({ advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet] })
+        .catch(() => {
+          /* refused; continuous was already the default or is unavailable */
+        });
+    } catch {
+      /* capability probing is best-effort */
+    }
   }
 
   /** Zoom is an optional capability; absence is normal and not an error. */
@@ -437,6 +493,8 @@ export class Scanner {
     this.pool = null;
     this.zoomTrack = null;
     this.zoomRange = null;
+    this.meter?.close();
+    this.meter = null;
     for (const track of this.stream?.getTracks() ?? []) track.stop();
     this.stream = null;
     this.opts.video.srcObject = null;

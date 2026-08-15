@@ -54,13 +54,23 @@ export function App(): JSX.Element {
           <p>{t('app.tagline')}</p>
         </div>
         <div className="masthead-actions">
+          {/* Icon rather than a word: the label is the widest thing in the
+              masthead in several languages, and it sits next to a language
+              picker that has to stay readable. The accessible name still
+              carries the full text. */}
           <button
             type="button"
-            className="btn btn-sm"
+            className="btn btn-sm btn-icon"
             onClick={() => setSharing(true)}
             aria-label={t('share.title')}
+            title={t('share.title')}
           >
-            {t('app.share')}
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+              <path
+                d="M18 8a3 3 0 1 0-2.83-4H15a3 3 0 0 0 .17 1L8.8 8.6a3 3 0 1 0 0 6.8l6.37 3.6A3 3 0 1 0 18 16a3 3 0 0 0-2.06.82L9.9 13.4a3 3 0 0 0 0-2.8l6.04-3.42A3 3 0 0 0 18 8Z"
+                fill="currentColor"
+              />
+            </svg>
           </button>
           <select
           className="lang-select"

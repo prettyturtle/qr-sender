@@ -24,6 +24,7 @@ import { CameraPermissionError, Scanner, type ScannerStats } from '../../platfor
 import { deleteTransfer, listTransfers, saveTransfer, type StoredTransfer } from '../../platform/storage.js';
 import { acquireWakeLock } from '../../platform/wakeLock.js';
 
+import { focusQuality, type FocusQuality } from '../../platform/sharpness.js';
 import { formatDuration, useT, type MessageKey } from '../i18n.js';
 import { useAppStore } from '../store.js';
 import { Viewer } from './Viewer.js';
@@ -115,9 +116,26 @@ function coachingFor(
   peakFps: number,
   silent: boolean,
   symbolRate: number,
+  focus: FocusQuality,
+  fixedFocus: boolean,
 ): Coaching {
+  // Focus outranks everything else that could be said. A defocused symbol is
+  // not a slow transfer, it is no transfer, and every other piece of advice —
+  // hold steady, move closer, avoid glare — is wasted while it stands.
+  if (focus === 'poor') {
+    return {
+      badgeClass: 'badge warn',
+      qualityKey: 'recv.quality.blurry',
+      coachKey: fixedFocus ? 'recv.coach.fixedFocus' : 'recv.coach.focus',
+    };
+  }
   if (!hasSignal) return { badgeClass: 'badge', qualityKey: 'recv.waiting', coachKey: 'recv.aim' };
   if (silent) return { badgeClass: 'badge', qualityKey: 'recv.quality.none', coachKey: 'recv.coach.steady' };
+  // Sharp enough to see a symbol but not a dense one: the fix is on the sending
+  // side, and no amount of aiming here will substitute for it.
+  if (focus === 'fair' && fps < GOOD_FLOOR_FPS) {
+    return { badgeClass: 'badge warn', qualityKey: 'recv.quality.slow', coachKey: 'recv.coach.lowerDensity' };
+  }
   // Decoding far more frames than are useful means the symbols on screen are
   // being re-read: this device has headroom and the sender does not.
   if (symbolRate > 1 && fps > symbolRate * SENDER_BOUND_RATIO) {
@@ -163,6 +181,8 @@ export function ReceiveView(): JSX.Element {
   const [decodeFps, setDecodeFps] = useState(0);
   /** Best rate this device has reached, the reference the coaching compares against. */
   const [peakFps, setPeakFps] = useState(0);
+  const [sharpness, setSharpness] = useState(-1);
+  const [fixedFocus, setFixedFocus] = useState(false);
   /** Useful symbols per second, measured. 0 means "not enough data yet". */
   const [symbolRate, setSymbolRate] = useState(0);
   const [engine, setEngine] = useState('');
@@ -290,6 +310,10 @@ export function ReceiveView(): JSX.Element {
             // itself; the crop factor only shrinks the decoder's search.
             (hw.zoom > 1.05 ? ` · zoom ${hw.zoom.toFixed(1)}` : '');
       setEngine((prev) => (prev === label ? prev : label));
+
+      const focus = hw?.sharpness ?? -1;
+      setSharpness((prev) => (Math.abs(prev - focus) < 0.02 ? prev : focus));
+      setFixedFocus(hw?.fixedFocus ?? false);
       setSilent(now - lastReadAtRef.current >= SILENT_MS);
 
       const rateSamples = rateSamplesRef.current.filter((s) => now - s.at <= RATE_WINDOW_MS);
@@ -541,7 +565,8 @@ export function ReceiveView(): JSX.Element {
 
   if (phase === 'scanning') {
     const hasSignal = progress.needed > 0;
-    const coach = coachingFor(hasSignal, decodeFps, peakFps, silent, symbolRate);
+    const focus = focusQuality(sharpness);
+    const coach = coachingFor(hasSignal, decodeFps, peakFps, silent, symbolRate, focus, fixedFocus);
     const remaining = Math.max(0, progress.needed - progress.received);
     // Divide by the measured useful-symbol rate, not the decode rate — a rate of
     // 0 yields Infinity, which the formatter renders as "—" rather than a lie.
@@ -560,6 +585,18 @@ export function ReceiveView(): JSX.Element {
         <div className="viewfinder">
           <video ref={videoRef} playsInline muted />
           <div className="reticle" />
+          {/* Focus is the one thing a user can fix by moving, and the only way
+              to fix it on a fixed-focus webcam. It needs a live readout right
+              on the viewfinder, not a number in a table below it — you cannot
+              aim at something you have to look away to read. */}
+          {sharpness >= 0 && (
+            <div className={`focus-meter ${focus}`}>
+              <span>{t('recv.focus')}</span>
+              <div className="focus-track">
+                <div className="focus-fill" style={{ width: `${Math.round(sharpness * 100)}%` }} />
+              </div>
+            </div>
+          )}
           <div className="overlay">
             <span className={coach.badgeClass}>{t(coach.qualityKey)}</span>
             <span aria-live="polite">{t(coach.coachKey)}</span>

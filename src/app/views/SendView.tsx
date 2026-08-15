@@ -51,8 +51,7 @@ const STAGE_CHROME_PX = 132;
  * `.qr-stage` is forced white in both themes so the symbol is never inverted —
  * which means controls inside it cannot inherit the theme's text colour.
  */
-const STAGE_BTN: CSSProperties = { background: '#fff', color: '#16161a', borderColor: '#c9c9d1' };
-const STAGE_TEXT: CSSProperties = { color: '#444', fontSize: '12px', margin: 0 };
+const STAGE_TEXT: CSSProperties = { color: 'var(--muted)', fontSize: '12px', margin: 0 };
 
 type Source = { kind: 'file'; file: File } | { kind: 'text'; text: string };
 
@@ -482,22 +481,23 @@ export function SendView(): JSX.Element {
             role="img"
           />
 
-          {/* Nothing else shares the stage. A second QR beside the animated one
-              is a second thing for a camera to lock onto, and the app link is
-              already reachable from the share dialog — where someone who does
-              not have the app yet is actually looking. Fullscreen drops the
-              remaining line too, so the symbol gets every pixel. */}
+        </div>
+
+        {/* Outside the stage, not inside it. Anything sharing that white box
+            competes with the symbol for the box's width and height, and the
+            symbol is the whole point of the screen — every row of chrome in
+            there is throughput given away. In fullscreen the controls float
+            over the symbol instead, for the same reason. */}
+        <div className={fullscreen ? 'qr-controls fullscreen' : 'qr-controls'}>
           {!fullscreen && (
             <p style={STAGE_TEXT} aria-live="polite">
               {t('send.loops', { n: stats.passes + 1 })}
             </p>
           )}
-
           <div className="btn-row">
             <button
               type="button"
               className="btn btn-sm"
-              style={STAGE_BTN}
               aria-pressed={fullscreen}
               onClick={() => {
                 const next = !fullscreen;
@@ -508,7 +508,7 @@ export function SendView(): JSX.Element {
             >
               {fullscreen ? t('common.close') : t('send.fullscreen')}
             </button>
-            <button type="button" className="btn btn-sm" style={STAGE_BTN} onClick={stop}>
+            <button type="button" className="btn btn-sm" onClick={stop}>
               {t('send.stop')}
             </button>
           </div>
