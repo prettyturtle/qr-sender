@@ -69,12 +69,16 @@ type Phase =
  * chosen up front. Mirrors the shell's max-width and padding plus the stage's
  * own padding.
  */
-function stageAreaEstimate(): { width: number; height: number } {
+/** Chrome left on screen in fullscreen: the button row, which floats over the symbol. */
+const FULLSCREEN_CHROME_PX = 8;
+
+function stageAreaEstimate(fullscreen = false): { width: number; height: number } {
   // The playing stage breaks out of the shell's max-width, so the whole viewport
   // is available. A square symbol on a landscape screen wastes the horizontal
   // half of it, which is what makes tiling worth the complexity.
   const width = Math.max(MIN_STAGE_CSS_SIZE, (globalThis.innerWidth ?? 400) - 32);
-  const height = Math.max(MIN_STAGE_CSS_SIZE, (globalThis.innerHeight ?? 700) - STAGE_CHROME_PX);
+  const reserved = fullscreen ? FULLSCREEN_CHROME_PX : STAGE_CHROME_PX;
+  const height = Math.max(MIN_STAGE_CSS_SIZE, (globalThis.innerHeight ?? 700) - reserved);
   return { width, height };
 }
 
@@ -101,9 +105,11 @@ export function SendView(): JSX.Element {
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const [error, setError] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
+  const repaintStaticRef = useRef<(() => void) | null>(null);
+  const fullscreenRef = useRef(false);
   const [wakeLockSupported, setWakeLockSupported] = useState(true);
   const [stats, setStats] = useState({ frames: 0, passes: 0 });
-  const [stageArea, setStageArea] = useState(stageAreaEstimate);
+  const [stageArea, setStageArea] = useState(() => stageAreaEstimate(false));
 
   // Payload per tick is the throughput lever: a denser symbol where the screen
   // can resolve it, and more than one symbol where the screen has room.
@@ -119,7 +125,7 @@ export function SendView(): JSX.Element {
   );
 
   useEffect(() => {
-    const onResize = (): void => setStageArea(stageAreaEstimate());
+    const onResize = (): void => setStageArea(stageAreaEstimate(fullscreenRef.current));
     window.addEventListener('resize', onResize);
     globalThis.screen?.orientation?.addEventListener('change', onResize);
     return () => {
@@ -206,30 +212,47 @@ export function SendView(): JSX.Element {
     });
     painterRef.current = painter;
 
+    // The bitmap is authoritative about its own size. Blitting it onto a canvas
+    // sized from a stale layout pass would letterbox it against the black
+    // backdrop, so adopt its size instead of assuming the two agree.
+    const blit = (bitmap: ImageBitmap): void => {
+      if (canvas.width !== bitmap.width) {
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        canvas.style.width = `${bitmap.width / dpr}px`;
+        canvas.style.height = `${bitmap.height / dpr}px`;
+      }
+      ctx.drawImage(bitmap, 0, 0);
+      bitmap.close();
+    };
+
     const paint = (): void => {
       const bitmap = painter.take();
       // Nothing buffered: hold the current symbol rather than blanking. The
       // receiver sees a duplicate, which costs one frame and nothing else.
       if (bitmap === null) return;
-      ctx.drawImage(bitmap, 0, 0);
-      bitmap.close();
+      blit(bitmap);
     };
 
     if (emitter.isStatic) {
       // One frame is the whole transfer. The painter is asynchronous, so retry
       // until the first bitmap lands, then stop — there is nothing to animate.
-      let attempts = 0;
-      const settle = (): void => {
+      let timer = 0;
+      const settle = (attempts: number): void => {
         const bitmap = painter.take();
         if (bitmap !== null) {
-          ctx.drawImage(bitmap, 0, 0);
-          bitmap.close();
+          blit(bitmap);
           return;
         }
-        if (attempts++ < 60) globalThis.setTimeout(settle, 25);
+        if (attempts < 60) timer = window.setTimeout(() => settle(attempts + 1), 25);
       };
-      settle();
+      // A resize discards the buffered frame, and with nothing animating there
+      // is no next tick to draw the replacement — so the resize asks for one.
+      repaintStaticRef.current = () => settle(0);
+      settle(0);
       return () => {
+        window.clearTimeout(timer);
+        repaintStaticRef.current = null;
         painter.close();
         painterRef.current = null;
       };
@@ -297,6 +320,7 @@ export function SendView(): JSX.Element {
       canvas.style.height = `${side / dpr}px`;
       // Buffered frames were painted at the old size and cannot be shown.
       painter.resize(scale);
+      repaintStaticRef.current?.();
     }
   }, [phase, stageArea, fullscreen]);
 
@@ -478,14 +502,22 @@ export function SendView(): JSX.Element {
             role="img"
           />
 
-          <div className="qr-side">
-            <canvas ref={sideCanvasRef} aria-hidden="true" />
-            <span>{t('send.receiverHint')}</span>
-          </div>
+          {/* Fullscreen exists to give the symbol every pixel the display has,
+              and to give the camera a plain field around it. Onboarding copy and
+              the join QR have already done their job by the time it is pressed —
+              on screen they only shrink the thing being photographed. */}
+          {!fullscreen && (
+            <>
+              <div className="qr-side">
+                <canvas ref={sideCanvasRef} aria-hidden="true" />
+                <span>{t('send.receiverHint')}</span>
+              </div>
 
-          <p style={STAGE_TEXT} aria-live="polite">
-            {t('send.loops', { n: stats.passes + 1 })}
-          </p>
+              <p style={STAGE_TEXT} aria-live="polite">
+                {t('send.loops', { n: stats.passes + 1 })}
+              </p>
+            </>
+          )}
 
           <div className="btn-row">
             <button
@@ -493,9 +525,14 @@ export function SendView(): JSX.Element {
               className="btn btn-sm"
               style={STAGE_BTN}
               aria-pressed={fullscreen}
-              onClick={() => setFullscreen(!fullscreen)}
+              onClick={() => {
+                const next = !fullscreen;
+                fullscreenRef.current = next;
+                setFullscreen(next);
+                setStageArea(stageAreaEstimate(next));
+              }}
             >
-              {t('send.fullscreen')}
+              {fullscreen ? t('common.close') : t('send.fullscreen')}
             </button>
             <button type="button" className="btn btn-sm" style={STAGE_BTN} onClick={stop}>
               {t('send.stop')}
@@ -503,6 +540,7 @@ export function SendView(): JSX.Element {
           </div>
         </div>
 
+        {!fullscreen && (
         <section className="card">
           <dl className="stats">
             <div className="stat">
@@ -528,9 +566,12 @@ export function SendView(): JSX.Element {
             </p>
           )}
         </section>
+        )}
 
-        <p className="notice">{t('send.noCompletionSignal')}</p>
-        {!wakeLockSupported && <p className="notice warn">{t('send.wakeLockUnsupported')}</p>}
+        {!fullscreen && <p className="notice">{t('send.noCompletionSignal')}</p>}
+        {!fullscreen && !wakeLockSupported && (
+          <p className="notice warn">{t('send.wakeLockUnsupported')}</p>
+        )}
       </>
     );
   }

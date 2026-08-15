@@ -56,16 +56,22 @@ class WorkerPainter implements FramePainter {
   private paintTotal = 0;
   private paintCount = 0;
   private nextId = 1;
+  private gen = 0;
   private closed = false;
 
   constructor(private opts: PainterOptions & { lookahead: number }) {
     for (let i = 0; i < (opts.workers ?? poolSize()); i++) {
       const worker = new Worker(new URL('./renderWorker.ts', import.meta.url), { type: 'module' });
       worker.onmessage = (event: MessageEvent<RenderResponse>) => {
-        const { bitmap, ms } = event.data;
+        const { bitmap, ms, gen } = event.data;
         this.paintTotal += ms;
         this.paintCount++;
-        if (this.closed || bitmap === null) bitmap?.close();
+        // A frame painted before the last resize/restyle is the wrong size or
+        // colour. Dropping the queue is not enough on its own: requests already
+        // running in a worker land afterwards, and one of those on a freshly
+        // grown canvas is what leaves a small symbol in the corner of a black
+        // square — permanently, for a single-frame transfer that never repaints.
+        if (this.closed || bitmap === null || gen !== this.gen) bitmap?.close();
         else this.queue.push(bitmap);
         this.idle.push(worker);
         this.fill();
@@ -90,6 +96,7 @@ class WorkerPainter implements FramePainter {
       const worker = this.idle.pop()!;
       const request: RenderRequest = {
         id: this.nextId++,
+        gen: this.gen,
         text: this.opts.nextText(),
         profile: this.opts.profile,
         scale: this.opts.scale,
@@ -120,6 +127,7 @@ class WorkerPainter implements FramePainter {
 
   /** Buffered frames were painted with the old settings; they cannot be shown. */
   private drop(): void {
+    this.gen++;
     for (const b of this.queue) b.close();
     this.queue.length = 0;
     this.fill();

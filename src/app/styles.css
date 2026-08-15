@@ -569,7 +569,24 @@ select:focus-visible,
   z-index: 50;
   justify-content: center;
   border-radius: 0;
-  padding: 12px;
+  padding: 0;
+}
+
+/* Floated, not stacked: every row of pixels the controls would occupy is a row
+   the symbol loses, and the symbol is the thing being photographed. */
+.qr-stage.fullscreen .btn-row {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  margin: 0;
+  gap: 8px;
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+
+.qr-stage.fullscreen .btn-row:hover,
+.qr-stage.fullscreen .btn-row:focus-within {
+  opacity: 1;
 }
 
 /* ─── receive ────────────────────────────────────────────────────────────── */

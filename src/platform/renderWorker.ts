@@ -19,6 +19,8 @@ import type { QrProfile } from '../core/params.js';
 
 export interface RenderRequest {
   id: number;
+  /** Bumped whenever scale or style changes; a frame painted for an older one is unusable. */
+  gen: number;
   /** base44 payload for one frame. */
   text: string;
   profile: QrProfile;
@@ -30,12 +32,13 @@ export interface RenderRequest {
 
 export interface RenderResponse {
   id: number;
+  gen: number;
   bitmap: ImageBitmap | null;
   ms: number;
 }
 
 self.onmessage = (event: MessageEvent<RenderRequest>): void => {
-  const { id, text, profile, scale, dark, rounded } = event.data;
+  const { id, gen, text, profile, scale, dark, rounded } = event.data;
   const started = performance.now();
   let bitmap: ImageBitmap | null = null;
   try {
@@ -43,6 +46,6 @@ self.onmessage = (event: MessageEvent<RenderRequest>): void => {
   } catch {
     bitmap = null;
   }
-  const response: RenderResponse = { id, bitmap, ms: performance.now() - started };
+  const response: RenderResponse = { id, gen, bitmap, ms: performance.now() - started };
   self.postMessage(response, bitmap === null ? [] : [bitmap]);
 };
