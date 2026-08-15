@@ -17,6 +17,7 @@
  *    holding, not a bug — a received document cannot phone home.
  */
 
+import { isOfficeMime } from '../core/office.js';
 import { readZipListing, type ZipListing } from '../core/zip.js';
 import { renderMarkdown, escapeHtml, previewDocument } from './markdown.js';
 
@@ -35,14 +36,15 @@ export type Preview =
   | { kind: 'text'; body: string; truncated: boolean; label: string }
   | { kind: 'table'; rows: string[][]; truncated: boolean }
   | { kind: 'archive'; listing: ZipListing }
+  /** Word/Excel/PowerPoint and their OpenDocument equivalents; content is extracted asynchronously. */
+  | { kind: 'office'; mime: string }
   | { kind: 'hex'; body: string; truncated: boolean };
 
 const ZIP_CONTAINERS = new Set([
   'application/zip',
   'application/epub+zip',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.hancom.hwpx',
+  'application/java-archive',
 ]);
 
 export function isTextual(mime: string): boolean {
@@ -169,6 +171,8 @@ export function classifyPreview({ mime, name, bytes, dark }: ClassifyOptions): P
     const rows = parseDelimited(body, mime === 'text/csv' ? ',' : '\t');
     if (rows.length > 0) return { kind: 'table', rows, truncated: truncated || rows.length >= TABLE_ROW_LIMIT };
   }
+
+  if (isOfficeMime(mime)) return { kind: 'office', mime };
 
   if (ZIP_CONTAINERS.has(mime)) {
     const listing = readZipListing(bytes);

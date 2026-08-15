@@ -50,7 +50,16 @@ const BY_EXTENSION: Readonly<Record<string, string>> = {
   // documents and archives
   pdf: 'application/pdf',
   zip: 'application/zip', jar: 'application/zip', apk: 'application/zip',
-  docx: 'application/zip', xlsx: 'application/zip', pptx: 'application/zip',
+  // OOXML and ODF are ZIP containers, so sniffing can only ever say "zip".
+  // The extension is what distinguishes a spreadsheet from a slide deck.
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  odt: 'application/vnd.oasis.opendocument.text',
+  ods: 'application/vnd.oasis.opendocument.spreadsheet',
+  odp: 'application/vnd.oasis.opendocument.presentation',
+  hwpx: 'application/vnd.hancom.hwpx',
+  pages: 'application/zip', numbers: 'application/zip',
   gz: 'application/gzip', tgz: 'application/gzip', bz2: 'application/x-bzip2',
   xz: 'application/x-xz', tar: 'application/x-tar', rar: 'application/vnd.rar',
   '7z': 'application/x-7z-compressed',

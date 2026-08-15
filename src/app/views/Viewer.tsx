@@ -19,6 +19,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { sanitizeFilename, sanitizeMime } from '../../core/filename.js';
 import { resolveMime } from '../../core/mime.js';
+import { OFFICE_MIME_HANDLERS, type OfficeContent } from '../../core/office.js';
 import { formatBytes } from '../estimate.js';
 import { useT, type MessageKey, type Translate } from '../i18n.js';
 import { nativePdfViewerAvailable, renderPdf, type RenderedPdf } from '../../platform/pdf.js';
@@ -71,6 +72,8 @@ export function Viewer({ name, mime, data, integrity, onReset }: ViewerProps): J
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
   const [pdfPages, setPdfPages] = useState<RenderedPdf | null>(null);
   const [pdfState, setPdfState] = useState<'idle' | 'rendering' | 'failed'>('idle');
+  const [office, setOffice] = useState<OfficeContent | null>(null);
+  const [officeState, setOfficeState] = useState<'idle' | 'reading' | 'failed'>('idle');
 
   // Created inside effects rather than memos so a StrictMode double-mount hands
   // out fresh URLs instead of reusing ones it has already revoked.
@@ -125,6 +128,35 @@ export function Viewer({ name, mime, data, integrity, onReset }: ViewerProps): J
       for (const url of rendered?.pages ?? []) URL.revokeObjectURL(url);
     };
   }, [needsPdfFallback, data]);
+
+  // Word, Excel and PowerPoint are ZIPs of XML, so their content is pulled out
+  // here rather than shown as an archive listing — "42 entries" tells an office
+  // worker nothing about their own document.
+  useEffect(() => {
+    if (preview.kind !== 'office') {
+      setOffice(null);
+      setOfficeState('idle');
+      return;
+    }
+    let alive = true;
+    setOfficeState('reading');
+    const handler = OFFICE_MIME_HANDLERS[preview.mime];
+    void handler(data)
+      .then((content) => {
+        if (!alive) return;
+        if (content === null) setOfficeState('failed');
+        else {
+          setOffice(content);
+          setOfficeState('idle');
+        }
+      })
+      .catch(() => {
+        if (alive) setOfficeState('failed');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [preview, data]);
 
   useEffect(() => {
     if (!copied) return;
@@ -201,6 +233,8 @@ export function Viewer({ name, mime, data, integrity, onReset }: ViewerProps): J
           fontDoc={fontDoc}
           pdfPages={pdfPages}
           pdfState={pdfState}
+          office={office}
+          officeState={officeState}
           name={safeName}
           t={t}
         />
@@ -236,6 +270,8 @@ interface BodyProps {
   fontDoc: string | null;
   pdfPages: RenderedPdf | null;
   pdfState: 'idle' | 'rendering' | 'failed';
+  office: OfficeContent | null;
+  officeState: 'idle' | 'reading' | 'failed';
   name: string;
   t: Translate;
 }
@@ -247,6 +283,8 @@ function PreviewBody({
   fontDoc,
   pdfPages,
   pdfState,
+  office,
+  officeState,
   name,
   t,
 }: BodyProps): JSX.Element {
@@ -402,6 +440,85 @@ function PreviewBody({
           <p className="mono" style={{ marginBottom: 0 }}>
             {t('view.entries', { n: preview.listing.entries.length })}
             {preview.listing.truncated ? ` · ${t('view.truncated')}` : ''}
+          </p>
+        </>
+      );
+
+    case 'office':
+      if (office === null) {
+        if (officeState === 'failed') return <p className="notice">{t('view.officeFailed')}</p>;
+        return (
+          <p className="notice">
+            <span className="spinner" aria-hidden="true" />
+            {t('view.officeReading')}
+          </p>
+        );
+      }
+      if (office.kind === 'document') {
+        return (
+          <>
+            <div className="preview-box">
+              <div className="doc-text">
+                {office.paragraphs.map((line, i) => (
+                  <p key={i}>{line}</p>
+                ))}
+              </div>
+            </div>
+            <p className="mono" style={{ marginBottom: 0 }}>
+              {t('view.paragraphs', { n: office.paragraphs.length })}
+              {office.truncated ? ` · ${t('view.truncated')}` : ''}
+            </p>
+          </>
+        );
+      }
+      if (office.kind === 'slides') {
+        return (
+          <>
+            <div className="preview-box">
+              {office.slides.map((slide, i) => (
+                <section key={i} className="slide">
+                  <h3>
+                    <span className="slide-no">{i + 1}</span>
+                    {slide.title}
+                  </h3>
+                  {slide.lines.map((line, j) => (
+                    <p key={j}>{line}</p>
+                  ))}
+                </section>
+              ))}
+            </div>
+            <p className="mono" style={{ marginBottom: 0 }}>
+              {t('view.slides', { n: office.slides.length })}
+              {office.truncated ? ` · ${t('view.truncated')}` : ''}
+            </p>
+          </>
+        );
+      }
+      return (
+        <>
+          {office.sheets.map((sheet, i) => (
+            <div key={i} style={{ marginTop: i === 0 ? 0 : 14 }}>
+              <p className="card-title" style={{ marginBottom: 6 }}>
+                {sheet.name}
+              </p>
+              <div className="preview-box flush scroll-x">
+                <table className="data-table">
+                  <tbody>
+                    {sheet.rows.map((row, r) => (
+                      <tr key={r}>
+                        {row.map((cell, c) => (
+                          <td key={c}>{cell}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+          <p className="mono" style={{ marginBottom: 0 }}>
+            {t('view.sheets', { n: office.sheets.length })}
+            {office.truncated ? ` · ${t('view.truncated')}` : ''}
           </p>
         </>
       );

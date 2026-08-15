@@ -88,7 +88,9 @@ describe('mime resolution', () => {
     expect(mimeFromFilename('sheet.csv')).toBe('text/csv');
     expect(mimeFromFilename('page.html')).toBe('text/html');
     expect(mimeFromFilename('icon.svg')).toBe('image/svg+xml');
-    expect(mimeFromFilename('deck.pptx')).toBe('application/zip');
+    expect(mimeFromFilename('deck.pptx')).toBe(
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    );
     expect(mimeFromFilename('font.woff2')).toBe('font/woff2');
     expect(mimeFromFilename('Dockerfile')).toBe('text/plain');
     expect(mimeFromFilename('.env')).toBe('text/plain');
@@ -120,9 +122,17 @@ describe('mime resolution', () => {
   });
 
   it('keeps zip-based document formats distinct from plain archives', () => {
+    // Sniffing can only ever say "zip" for these, so the extension decides
+    // whether the viewer shows a file list or the document's actual content.
     const zip = makeZip([{ name: 'word/document.xml', content: '<w/>' }]);
-    expect(resolveMime('', 'report.docx', zip)).toBe('application/zip');
+    expect(resolveMime('', 'report.docx', zip)).toBe(
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    expect(resolveMime('', 'sheet.xlsx', zip)).toBe(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
     expect(resolveMime('', 'book.epub', zip)).toBe('application/epub+zip');
+    expect(resolveMime('', 'plain.zip', zip)).toBe('application/zip');
   });
 
   it('recognises useless declared types', () => {

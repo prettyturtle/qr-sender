@@ -84,3 +84,98 @@ export function readZipListing(bytes: Uint8Array, maxEntries = 2000): ZipListing
 
   return { entries, truncated: entries.length < declared, zip64 };
 }
+
+const LOCAL_SIGNATURE = 0x04034b50;
+const METHOD_STORED = 0;
+const METHOD_DEFLATE = 8;
+
+/**
+ * Read one entry's bytes.
+ *
+ * Only stored and deflate are handled, which between them cover every real
+ * OOXML and ODF document — the office formats are the reason this exists.
+ * `DecompressionStream('deflate-raw')` does the inflating, so there is no
+ * decompression library here either.
+ */
+export async function readZipEntry(bytes: Uint8Array, name: string): Promise<Uint8Array | null> {
+  const listing = readZipListing(bytes);
+  if (listing === null) return null;
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+  // The listing does not carry local-header offsets, so walk the central
+  // directory again for the one entry we want.
+  let p = -1;
+  const eocdFrom = Math.max(0, bytes.length - MAX_EOCD_SEARCH);
+  for (let i = bytes.length - 22; i >= eocdFrom; i--) {
+    if (view.getUint32(i, true) === EOCD_SIGNATURE) {
+      p = view.getUint32(i + 16, true);
+      break;
+    }
+  }
+  if (p < 0 || p >= bytes.length) return null;
+
+  const decoder = new TextDecoder('utf-8', { fatal: false });
+  while (p + 46 <= bytes.length && view.getUint32(p, true) === CENTRAL_SIGNATURE) {
+    const method = view.getUint16(p + 10, true);
+    const compressedSize = view.getUint32(p + 20, true);
+    const nameLen = view.getUint16(p + 28, true);
+    const extraLen = view.getUint16(p + 30, true);
+    const commentLen = view.getUint16(p + 32, true);
+    const localOffset = view.getUint32(p + 42, true);
+    const entryName = decoder.decode(bytes.subarray(p + 46, p + 46 + nameLen));
+
+    if (entryName === name) {
+      if (localOffset + 30 > bytes.length) return null;
+      if (view.getUint32(localOffset, true) !== LOCAL_SIGNATURE) return null;
+      const localNameLen = view.getUint16(localOffset + 26, true);
+      const localExtraLen = view.getUint16(localOffset + 28, true);
+      const start = localOffset + 30 + localNameLen + localExtraLen;
+      const end = start + compressedSize;
+      if (end > bytes.length) return null;
+      const raw = bytes.subarray(start, end);
+
+      if (method === METHOD_STORED) return raw.slice();
+      if (method !== METHOD_DEFLATE) return null;
+      try {
+        return await inflateRaw(raw);
+      } catch {
+        return null;
+      }
+    }
+    p = p + 46 + nameLen + extraLen + commentLen;
+  }
+  return null;
+}
+
+/** Names of every entry, so a caller can find `ppt/slides/slide*.xml` and friends. */
+export function zipEntryNames(bytes: Uint8Array): string[] {
+  return readZipListing(bytes)?.entries.map((e) => e.name) ?? [];
+}
+
+async function inflateRaw(raw: Uint8Array): Promise<Uint8Array> {
+  const stream = new Blob([raw as BlobPart]).stream().pipeThrough(
+    new DecompressionStream('deflate-raw') as unknown as ReadableWritablePair<Uint8Array, Uint8Array>,
+  );
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = stream.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    total += value.byteLength;
+    // An office document that inflates past this is not something to preview.
+    if (total > 64 * 1024 * 1024) {
+      await reader.cancel().catch(() => {});
+      throw new Error('zip entry too large');
+    }
+  }
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const c of chunks) {
+    out.set(c, o);
+    o += c.byteLength;
+  }
+  return out;
+}

@@ -33,7 +33,7 @@ import { buildQr, drawQr, type RenderedQr } from '../../platform/qrRender.js';
 import { acquireWakeLock, type WakeLockHandle } from '../../platform/wakeLock.js';
 import { estimateTransfer, formatBytes } from '../estimate.js';
 import { formatDuration, useT } from '../i18n.js';
-import { useAppStore, type PlaybackFps } from '../store.js';
+import { useAppStore, type PlaybackFps, type QrStyle } from '../store.js';
 import { QR_COLORS } from '../palette.js';
 
 /** Filename used when the source is typed text rather than a file. */
@@ -78,12 +78,15 @@ export function SendView(): JSX.Element {
   const locale = useAppStore((s) => s.locale);
   const fps = useAppStore((s) => s.playbackFps);
   const setPlaybackFps = useAppStore((s) => s.setPlaybackFps);
+  const qrStyle = useAppStore((s) => s.qrStyle);
+  const setQrStyle = useAppStore((s) => s.setQrStyle);
   const qrColor = useAppStore((s) => s.qrColor);
   const setQrColor = useAppStore((s) => s.setQrColor);
-  const qrRounded = useAppStore((s) => s.qrRounded);
-  const setQrRounded = useAppStore((s) => s.setQrRounded);
-  const designPriority = useAppStore((s) => s.qrDesignPriority);
-  const setDesignPriority = useAppStore((s) => s.setQrDesignPriority);
+
+  // Styling only reads at a lower module density, so the two settings move
+  // together: plain is fastest, custom is prettier and slower.
+  const custom = qrStyle === 'custom';
+  const drawStyle = { dark: custom ? qrColor : '#000000', rounded: custom };
 
   const [file, setFile] = useState<File | null>(null);
   const [text, setText] = useState('');
@@ -105,9 +108,9 @@ export function SendView(): JSX.Element {
       chooseProfile(
         Math.min(stageArea.width, stageArea.height),
         globalThis.devicePixelRatio || 1,
-        designPriority ? DESIGN_MAX_VERSION : undefined,
+        custom ? DESIGN_MAX_VERSION : undefined,
       ),
-    [stageArea, designPriority],
+    [stageArea, custom],
   );
 
   useEffect(() => {
@@ -172,7 +175,6 @@ export function SendView(): JSX.Element {
   useEffect(() => {
     if (phase.kind !== 'playing') return;
     const emitter = phase.emitter;
-    const style = { dark: qrColor, rounded: qrRounded };
 
     const nextFrame = (): RenderedQr => buildQr(base44Encode(emitter.next()), phase.profile);
 
@@ -182,7 +184,7 @@ export function SendView(): JSX.Element {
     if (emitter.isStatic) {
       const canvas = tileRefs.current[0];
       if (canvas !== null && canvas !== undefined) {
-        drawQr(canvas, nextFrame(), { cssSize: stageSizeRef.current, ...style });
+        drawQr(canvas, nextFrame(), { cssSize: stageSizeRef.current, ...drawStyle });
       }
       return;
     }
@@ -196,7 +198,7 @@ export function SendView(): JSX.Element {
     const show = (): void => {
       const canvas = tileRefs.current[0];
       if (canvas === null || canvas === undefined) return;
-      drawQr(canvas, pending ?? nextFrame(), { cssSize: stageSizeRef.current, ...style });
+      drawQr(canvas, pending ?? nextFrame(), { cssSize: stageSizeRef.current, ...drawStyle });
       // One-frame lookahead: build the *next* symbol right after painting so the
       // encode cost lands in the idle tail of the period instead of between the
       // deadline and the paint, where it would show up as playback jitter.
@@ -233,7 +235,7 @@ export function SendView(): JSX.Element {
       cancelAnimationFrame(raf);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [phase, fps, qrColor, qrRounded]);
+  }, [phase, fps, qrColor, custom]);
 
   /* ─── canvas sizing ───────────────────────────────────────────────────── */
 
@@ -595,8 +597,6 @@ export function SendView(): JSX.Element {
       </p>
 
       <section className="card">
-        <p className="card-title">{t('send.qrStyle')}</p>
-
         <div className="field">
           <label htmlFor="send-fps">{t('send.speed')}</label>
           <select
@@ -613,42 +613,38 @@ export function SendView(): JSX.Element {
         </div>
 
         <div className="field" style={{ marginTop: 14 }}>
-          <span id="send-color-label">{t('send.qrColor')}</span>
-          <div className="swatches" role="group" aria-labelledby="send-color-label">
-            {QR_COLORS.map((c) => (
-              <button
-                key={c.hex}
-                type="button"
-                className={qrColor === c.hex ? 'swatch selected' : 'swatch'}
-                style={{ background: c.hex }}
-                aria-label={c.name}
-                aria-pressed={qrColor === c.hex}
-                onClick={() => setQrColor(c.hex)}
-              />
-            ))}
-          </div>
+          <label htmlFor="send-style">{t('send.qrStyle')}</label>
+          <select
+            id="send-style"
+            value={qrStyle}
+            onChange={(event) => setQrStyle(event.target.value as QrStyle)}
+          >
+            <option value="plain">{t('send.styleBasic')}</option>
+            <option value="custom">{t('send.styleCustom')}</option>
+          </select>
         </div>
 
-        <label className="switch" style={{ marginTop: 14 }}>
-          <input
-            type="checkbox"
-            checked={qrRounded}
-            onChange={(event) => setQrRounded(event.target.checked)}
-          />
-          <span>{t('send.qrRounded')}</span>
-        </label>
-
-        <label className="switch" style={{ marginTop: 10 }}>
-          <input
-            type="checkbox"
-            checked={designPriority}
-            onChange={(event) => setDesignPriority(event.target.checked)}
-          />
-          <span>{t('send.qrDesign')}</span>
-        </label>
+        {custom && (
+          <div className="field" style={{ marginTop: 14 }}>
+            <span id="send-color-label">{t('send.qrColor')}</span>
+            <div className="swatches" role="group" aria-labelledby="send-color-label">
+              {QR_COLORS.map((c) => (
+                <button
+                  key={c.hex}
+                  type="button"
+                  className={qrColor === c.hex ? 'swatch selected' : 'swatch'}
+                  style={{ background: c.hex }}
+                  aria-label={c.name}
+                  aria-pressed={qrColor === c.hex}
+                  onClick={() => setQrColor(c.hex)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
 
         <p className="mono" style={{ marginTop: 10, marginBottom: 0 }}>
-          {t('send.qrStyleNote')}
+          {custom ? t('send.styleCustomNote') : t('send.styleBasicNote')}
         </p>
       </section>
 

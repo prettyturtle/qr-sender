@@ -6,6 +6,7 @@ import { detectLocale, type Locale } from './i18n.js';
 import { QR_COLORS } from './palette.js';
 
 export type PlaybackFps = (typeof PLAYBACK_FPS_OPTIONS)[number];
+export type QrStyle = 'plain' | 'custom';
 
 interface AppState {
   locale: Locale;
@@ -18,16 +19,17 @@ interface AppState {
   detectorPreference: DetectorKind | null;
   setDetectorPreference: (kind: DetectorKind | null) => void;
 
-  /** Module colour. Rejected at draw time if it lacks contrast against white. */
+  /**
+   * `plain` is black, square, and as dense as the screen allows — the fastest
+   * the channel goes. `custom` is coloured and rounded, which only reads at a
+   * lower module density, so it trades transfer speed for appearance.
+   */
+  qrStyle: QrStyle;
+  setQrStyle: (style: QrStyle) => void;
+
+  /** Module colour, used by `custom`. Rejected at draw time without enough contrast. */
   qrColor: string;
   setQrColor: (color: string) => void;
-
-  qrRounded: boolean;
-  setQrRounded: (rounded: boolean) => void;
-
-  /** Trade payload per frame for modules big enough to see the styling. */
-  qrDesignPriority: boolean;
-  setQrDesignPriority: (on: boolean) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -42,18 +44,15 @@ export const useAppStore = create<AppState>()(
       detectorPreference: null,
       setDetectorPreference: (detectorPreference) => set({ detectorPreference }),
 
-      qrColor: QR_COLORS[0].hex,
+      qrStyle: 'plain',
+      setQrStyle: (qrStyle) => set({ qrStyle }),
+
+      qrColor: QR_COLORS[1].hex,
       setQrColor: (qrColor) => set({ qrColor }),
-
-      qrRounded: true,
-      setQrRounded: (qrRounded) => set({ qrRounded }),
-
-      qrDesignPriority: false,
-      setQrDesignPriority: (qrDesignPriority) => set({ qrDesignPriority }),
     }),
     {
       name: 'qr-sender-settings',
-      version: 3,
+      version: 4,
       // Without this, a bumped version discards nothing but also migrates
       // nothing, and new fields silently arrive undefined for returning users.
       migrate: (persisted) => persisted as never,
