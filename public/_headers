@@ -8,3 +8,14 @@
   Referrer-Policy: no-referrer
   Cross-Origin-Opener-Policy: same-origin
   Permissions-Policy: camera=(self), microphone=(), geolocation=(), interest-cohort=()
+
+# Netlify infers this one as application/octet-stream, which makes browsers
+# ignore the web app manifest and refuse to offer installation.
+/manifest.webmanifest
+  Content-Type: application/manifest+json
+
+/*.wasm
+  Cache-Control: public, max-age=31536000, immutable
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
