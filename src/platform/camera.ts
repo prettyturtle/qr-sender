@@ -35,6 +35,8 @@ export interface ScannerStats {
   roi: number;
   /** Fraction of the frame's short side the crop currently covers; 1 means no tracking. */
   cropFraction: number;
+  /** Current ISP zoom, or 0 where the camera does not offer it. */
+  zoom: number;
   /** Frame rate the camera actually settled on, which caps safe playback rates. */
   cameraFps: number;
   /** How many decodes may run at once. */
@@ -79,6 +81,23 @@ const TRACK_MISS_LIMIT = 8;
 
 /** Never crop below this, or a momentary bad box would lock the scanner onto noise. */
 const MIN_TRACK_FRACTION = 0.25;
+
+/**
+ * Fraction of the frame the symbol should occupy before zoom stops chasing it.
+ *
+ * Cropping in software cannot create pixels the sensor never captured — it only
+ * shrinks the decoder's search area. Optical/ISP zoom is different: the sensor
+ * is cropped *before* the pipeline scales to the output resolution, so a symbol
+ * that fills more of the frame genuinely gets more pixels per module. That is
+ * the only lever on this side that raises the sampling rate itself.
+ */
+const ZOOM_TARGET_FRACTION = 0.68;
+
+/** Do not react to noise; only correct when the symbol is meaningfully off target. */
+const ZOOM_DEADBAND = 0.12;
+
+/** Seconds between zoom corrections, so autofocus is not thrashed. */
+const ZOOM_INTERVAL_MS = 1200;
 
 export interface ScannerOptions {
   video: HTMLVideoElement;
@@ -141,6 +160,10 @@ export class Scanner {
   private track: SymbolBox | null = null;
   private trackMisses = 0;
   private lastCropFraction = 1;
+  private zoomTrack: MediaStreamTrack | null = null;
+  private zoomRange: { min: number; max: number; step: number } | null = null;
+  private zoomValue = 1;
+  private lastZoomAt = 0;
   private stats: ScannerStats = {
     attemptFps: 0,
     decodeFps: 0,
@@ -148,6 +171,7 @@ export class Scanner {
     resolution: '',
     roi: ROI_NATIVE,
     cropFraction: 1,
+    zoom: 0,
     cameraFps: 0,
     concurrency: 1,
     latencyMs: 0,
@@ -198,7 +222,9 @@ export class Scanner {
     this.stats.detector = this.pool.kind;
     this.stats.concurrency = this.pool.concurrency;
 
-    const track = this.stream.getVideoTracks()[0];
+    const track = this.stream.getVideoTracks()[0] ?? null;
+    this.zoomTrack = track;
+    this.readZoomRange(track);
     const settings = track?.getSettings();
     this.stats.resolution = settings ? `${settings.width ?? '?'}x${settings.height ?? '?'}` : '';
     // The playback rate a sender can safely use is capped by this: each symbol
@@ -295,6 +321,7 @@ export class Scanner {
       decodeFps: (this.decodes * 1000) / elapsed,
       roi: this.targetRoi(),
       cropFraction: this.lastCropFraction,
+      zoom: this.zoomRange === null ? 0 : this.zoomValue,
       latencyMs: this.pool?.latencyMs ?? 0,
     };
     this.attempts = 0;
@@ -347,6 +374,53 @@ export class Scanner {
       y: crop.sy + box.y * factor,
       size: box.size * factor,
     };
+    const frameShort = Math.min(this.opts.video.videoWidth, this.opts.video.videoHeight);
+    if (frameShort > 0) this.adjustZoom(this.track.size / frameShort);
+  }
+
+  /** Zoom is an optional capability; absence is normal and not an error. */
+  private readZoomRange(track: MediaStreamTrack | null): void {
+    if (track === null || typeof track.getCapabilities !== 'function') return;
+    try {
+      const caps = track.getCapabilities() as MediaTrackCapabilities & {
+        zoom?: { min: number; max: number; step: number };
+      };
+      const zoom = caps.zoom;
+      if (zoom === undefined || zoom.max <= zoom.min) return;
+      this.zoomRange = { min: zoom.min, max: zoom.max, step: zoom.step || 0.1 };
+      this.zoomValue = zoom.min;
+    } catch {
+      /* capability probing is best-effort */
+    }
+  }
+
+  /**
+   * Nudge the ISP zoom so the symbol fills a useful share of the frame.
+   *
+   * Runs on a slow cadence and inside a deadband: zoom changes re-trigger
+   * autofocus, and a scanner that hunts is worse than one that is slightly wide.
+   */
+  private adjustZoom(symbolFraction: number): void {
+    const range = this.zoomRange;
+    const track = this.zoomTrack;
+    if (range === null || track === null || symbolFraction <= 0) return;
+
+    const now = Date.now();
+    if (now - this.lastZoomAt < ZOOM_INTERVAL_MS) return;
+    if (Math.abs(symbolFraction - ZOOM_TARGET_FRACTION) < ZOOM_DEADBAND) return;
+
+    const wanted = this.zoomValue * (ZOOM_TARGET_FRACTION / symbolFraction);
+    const clamped = Math.min(range.max, Math.max(range.min, wanted));
+    if (Math.abs(clamped - this.zoomValue) < range.step) return;
+
+    this.lastZoomAt = now;
+    this.zoomValue = clamped;
+    void track
+      .applyConstraints({ advanced: [{ zoom: clamped } as MediaTrackConstraintSet] })
+      .catch(() => {
+        // Refused mid-stream: stop trying rather than retrying every second.
+        this.zoomRange = null;
+      });
   }
 
   private targetRoi(): number {
@@ -361,6 +435,8 @@ export class Scanner {
     else cancelAnimationFrame(this.handle);
     this.pool?.close();
     this.pool = null;
+    this.zoomTrack = null;
+    this.zoomRange = null;
     for (const track of this.stream?.getTracks() ?? []) track.stop();
     this.stream = null;
     this.opts.video.srcObject = null;

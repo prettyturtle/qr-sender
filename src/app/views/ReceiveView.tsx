@@ -285,7 +285,10 @@ export function ReceiveView(): JSX.Element {
             (hw.cameraFps > 0 ? ` · ${hw.cameraFps}fps` : '') +
             // Below 1 means the crop is locked onto the symbol rather than the
             // whole frame, which is where the pixels-per-module gain comes from.
-            (hw.cropFraction < 0.95 ? ` · ×${(1 / hw.cropFraction).toFixed(1)}` : '');
+            (hw.cropFraction < 0.95 ? ` · ×${(1 / hw.cropFraction).toFixed(1)}` : '') +
+            // Zoom is the only one of these that raises the sampling rate
+            // itself; the crop factor only shrinks the decoder's search.
+            (hw.zoom > 1.05 ? ` · zoom ${hw.zoom.toFixed(1)}` : '');
       setEngine((prev) => (prev === label ? prev : label));
       setSilent(now - lastReadAtRef.current >= SILENT_MS);
 
