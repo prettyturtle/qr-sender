@@ -16,7 +16,6 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react';
-import QRCode from 'qrcode';
 import {
   DEFAULT_N,
   DESIGN_MAX_VERSION,
@@ -29,7 +28,7 @@ import { buildPayload } from '../../core/payload.js';
 import { resolveMime } from '../../core/mime.js';
 import { Emitter } from '../../core/emitter.js';
 import { encode as base44Encode } from '../../core/base44.js';
-import { drawQr, moduleScale, symbolSide } from '../../platform/qrRender.js';
+import { moduleScale, symbolSide } from '../../platform/qrRender.js';
 import { createFramePainter, type FramePainter } from '../../platform/renderPool.js';
 import { acquireWakeLock, type WakeLockHandle } from '../../platform/wakeLock.js';
 import { adviseRates, measureRefreshHz, type RateAdvice } from '../../platform/displayRate.js';
@@ -41,7 +40,6 @@ import { QR_COLORS } from '../palette.js';
 /** Filename used when the source is typed text rather than a file. */
 const TEXT_FILENAME = 'message.txt';
 
-const SIDE_QR_CSS_SIZE = 108;
 const MIN_STAGE_CSS_SIZE = 200;
 /**
  * Vertical space reserved for the stage's own chrome. Every pixel not reserved
@@ -164,7 +162,6 @@ export function SendView(): JSX.Element {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const tileRefs = useRef<Array<HTMLCanvasElement | null>>([]);
-  const sideCanvasRef = useRef<HTMLCanvasElement | null>(null);
   /** Read by the rAF loop so a resize never restarts playback. */
   const stageSizeRef = useRef(MIN_STAGE_CSS_SIZE);
   const painterRef = useRef<FramePainter | null>(null);
@@ -201,11 +198,6 @@ export function SendView(): JSX.Element {
         : null,
     [sourceBytes, profile, fps],
   );
-
-  const receiveUrl = useMemo(() => {
-    const loc = globalThis.location;
-    return loc === undefined ? '' : `${loc.origin}${loc.pathname}#receive`;
-  }, []);
 
   const formatSeconds = (seconds: number): string => formatDuration(seconds, locale);
 
@@ -368,18 +360,6 @@ export function SendView(): JSX.Element {
       repaintStaticRef.current?.();
     }
   }, [phase, stageArea, fullscreen]);
-
-  /* ─── static onboarding QR ────────────────────────────────────────────── */
-
-  useEffect(() => {
-    if (phase.kind !== 'playing') return;
-    const canvas = sideCanvasRef.current;
-    if (canvas === null || receiveUrl === '') return;
-    // Not `buildQr`: that pins the stream's fixed version/ECC profile, which is
-    // far larger than a URL needs. Byte mode at ECC-M keeps this one small.
-    const symbol = QRCode.create(receiveUrl, { errorCorrectionLevel: 'M' });
-    drawQr(canvas, { modules: symbol.modules.size, data: symbol.modules.data }, { cssSize: SIDE_QR_CSS_SIZE });
-  }, [phase, receiveUrl]);
 
   /* ─── wake lock ───────────────────────────────────────────────────────── */
 
@@ -547,22 +527,16 @@ export function SendView(): JSX.Element {
             role="img"
           />
 
-          {/* Fullscreen exists to give the symbol every pixel the display has,
-              and to give the camera a plain field around it. Onboarding copy and
-              the join QR have already done their job by the time it is pressed —
-              on screen they only shrink the thing being photographed. */}
+          {/* Nothing else shares the stage. A second QR beside the animated one
+              is a second thing for a camera to lock onto, and the app link is
+              already reachable from the share dialog — where someone who does
+              not have the app yet is actually looking. Fullscreen drops the
+              remaining line too, so the symbol gets every pixel. */}
           {!fullscreen && (
-            <>
-              <div className="qr-side">
-                <canvas ref={sideCanvasRef} aria-hidden="true" />
-                <span>{t('send.receiverHint')}</span>
-              </div>
-
-              <p style={STAGE_TEXT} aria-live="polite">
-                {t('send.loops', { n: stats.passes + 1 })}
-                {actualFps > 0 && ` · ${t('send.actualFps', { n: actualFps })}`}
-              </p>
-            </>
+            <p style={STAGE_TEXT} aria-live="polite">
+              {t('send.loops', { n: stats.passes + 1 })}
+              {actualFps > 0 && ` · ${t('send.actualFps', { n: actualFps })}`}
+            </p>
           )}
 
           <div className="btn-row">

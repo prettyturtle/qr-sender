@@ -60,7 +60,6 @@ export const zhHans: Messages = {
   'recv.ceilingLabel': '接收上限',
   'receive.ceiling': '本设备接收上限约 {n}fps',
   'send.speed': '播放速率',
-  'send.receiverHint': '接收方可扫描此码打开应用',
   'send.noCompletionSignal': '此通道是单向的 — 请在接收设备上确认传输是否完成。',
   'send.fullscreen': '全屏',
   'recv.start': '启动摄像头',

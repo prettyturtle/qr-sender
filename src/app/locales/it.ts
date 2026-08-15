@@ -56,7 +56,6 @@ export const it: Messages = {
   'recv.ceilingLabel': 'Limite di ricezione',
   'receive.ceiling': 'questo dispositivo riceve fino a ~{n}fps',
   'send.speed': 'Velocità di riproduzione',
-  'send.receiverHint': 'Il destinatario può scansionare questo per aprire l’app',
   'send.noCompletionSignal': 'Il canale è unidirezionale — controlla sul dispositivo ricevente per confermare il completamento.',
   'send.fullscreen': 'Schermo intero',
   'recv.start': 'Avvia fotocamera',

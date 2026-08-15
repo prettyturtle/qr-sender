@@ -56,7 +56,6 @@ export const ru: Messages = {
   'recv.ceilingLabel': 'Предел приёма',
   'receive.ceiling': 'приём на этом устройстве до ~{n} fps',
   'send.speed': 'Скорость воспроизведения',
-  'send.receiverHint': 'Получатель может отсканировать это, чтобы открыть приложение',
   'send.noCompletionSignal': 'Канал односторонний — проверьте на принимающем устройстве, завершена ли передача.',
   'send.fullscreen': 'Во весь экран',
   'recv.start': 'Включить камеру',

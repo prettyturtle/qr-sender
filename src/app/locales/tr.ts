@@ -56,7 +56,6 @@ export const tr: Messages = {
   'recv.ceilingLabel': 'Alım sınırı',
   'receive.ceiling': 'bu cihaz en fazla ~{n}fps alır',
   'send.speed': 'Oynatma hızı',
-  'send.receiverHint': 'Alıcı, uygulamayı açmak için bunu taratabilir',
   'send.noCompletionSignal': 'Kanal tek yönlü — tamamlandığını doğrulamak için alıcı cihazı kontrol edin.',
   'send.fullscreen': 'Tam ekran',
   'recv.start': 'Kamerayı başlat',

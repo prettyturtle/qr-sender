@@ -60,7 +60,6 @@ export const vi: Messages = {
   'recv.ceilingLabel': 'Giới hạn nhận',
   'receive.ceiling': 'máy này nhận tối đa ~{n}fps',
   'send.speed': 'Tốc độ phát',
-  'send.receiverHint': 'Người nhận có thể quét mã này để mở ứng dụng',
   'send.noCompletionSignal': 'Kênh truyền là một chiều — hãy kiểm tra thiết bị nhận để xác nhận đã hoàn tất.',
   'send.fullscreen': 'Toàn màn hình',
   'recv.start': 'Bật camera',

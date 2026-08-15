@@ -59,7 +59,6 @@ export const ko = {
   'recv.ceilingLabel': '수신 한계',
   'receive.ceiling': '이 기기 수신 한계 약 {n}fps',
   'send.speed': '재생 속도',
-  'send.receiverHint': '받는 사람은 이 QR을 찍어 앱을 열 수 있습니다',
   'send.noCompletionSignal': '단방향 전송이라 완료 여부는 받는 기기에서 확인하세요.',
   'send.fullscreen': '전체 화면',
   'recv.start': '카메라 켜기',

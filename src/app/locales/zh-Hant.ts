@@ -60,7 +60,6 @@ export const zhHant: Messages = {
   'recv.ceilingLabel': '接收上限',
   'receive.ceiling': '本裝置接收上限約 {n}fps',
   'send.speed': '播放速率',
-  'send.receiverHint': '接收方可以掃描這個開啟應用程式',
   'send.noCompletionSignal': '這個通道是單向的 — 請在接收裝置上確認傳輸是否完成。',
   'send.fullscreen': '全螢幕',
   'recv.start': '啟動相機',

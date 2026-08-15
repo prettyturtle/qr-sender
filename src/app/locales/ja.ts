@@ -60,7 +60,6 @@ export const ja: Messages = {
   'recv.ceilingLabel': '受信上限',
   'receive.ceiling': 'この端末の受信上限 約{n}fps',
   'send.speed': '再生速度',
-  'send.receiverHint': '受け取る人はこのQRを読み取るとアプリを開けます',
   'send.noCompletionSignal': '一方向の通信のため、完了は受信側の端末で確認してください。',
   'send.fullscreen': '全画面',
   'recv.start': 'カメラを起動',

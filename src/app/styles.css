@@ -551,18 +551,6 @@ select:focus-visible,
 }
 
 
-.qr-side {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: #444;
-  font-size: 12px;
-}
-
-.qr-side canvas {
-  border: 1px solid #eee;
-}
-
 .qr-stage.fullscreen {
   position: fixed;
   inset: 0;

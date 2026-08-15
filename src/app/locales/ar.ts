@@ -60,7 +60,6 @@ export const ar: Messages = {
   'recv.ceilingLabel': 'حد الاستقبال',
   'receive.ceiling': 'يستقبل هذا الجهاز حتى ~{n}fps',
   'send.speed': 'معدّل التشغيل',
-  'send.receiverHint': 'يمكن للمستلم مسح هذا لفتح التطبيق',
   'send.noCompletionSignal': 'القناة أحادية الاتجاه — تحقّق من جهاز الاستقبال لتأكيد اكتمال النقل.',
   'send.fullscreen': 'ملء الشاشة',
   'recv.start': 'تشغيل الكاميرا',

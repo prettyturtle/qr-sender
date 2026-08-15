@@ -60,7 +60,6 @@ export const id: Messages = {
   'recv.ceilingLabel': 'Batas terima',
   'receive.ceiling': 'perangkat ini menerima hingga ~{n}fps',
   'send.speed': 'Kecepatan pemutaran',
-  'send.receiverHint': 'Penerima bisa memindai ini untuk membuka aplikasi',
   'send.noCompletionSignal': 'Saluran ini satu arah — periksa perangkat penerima untuk memastikan transfer selesai.',
   'send.fullscreen': 'Layar penuh',
   'recv.start': 'Aktifkan kamera',

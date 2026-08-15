@@ -56,7 +56,6 @@ export const pt: Messages = {
   'recv.ceilingLabel': 'Limite de recepção',
   'receive.ceiling': 'este aparelho recebe até ~{n}fps',
   'send.speed': 'Velocidade de reprodução',
-  'send.receiverHint': 'O destinatário pode escanear isto para abrir o app',
   'send.noCompletionSignal': 'O canal é unidirecional — verifique no dispositivo receptor para confirmar a conclusão.',
   'send.fullscreen': 'Tela cheia',
   'recv.start': 'Iniciar câmera',

@@ -60,7 +60,6 @@ export const en: Messages = {
   'recv.ceilingLabel': 'Receive ceiling',
   'receive.ceiling': 'this device receives up to ~{n}fps',
   'send.speed': 'Playback rate',
-  'send.receiverHint': 'The recipient can scan this to open the app',
   'send.noCompletionSignal': 'The channel is one-way — check the receiving device to confirm completion.',
   'send.fullscreen': 'Fullscreen',
   'recv.start': 'Start camera',

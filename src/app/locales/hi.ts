@@ -60,7 +60,6 @@ export const hi: Messages = {
   'recv.ceilingLabel': 'प्राप्ति सीमा',
   'receive.ceiling': 'यह डिवाइस अधिकतम ~{n}fps लेता है',
   'send.speed': 'प्लेबैक रेट',
-  'send.receiverHint': 'प्राप्तकर्ता इसे स्कैन करके ऐप खोल सकता है',
   'send.noCompletionSignal': 'यह चैनल एकतरफ़ा है — पूरा होने की पुष्टि के लिए प्राप्त करने वाले डिवाइस पर जाँच करें।',
   'send.fullscreen': 'फ़ुलस्क्रीन',
   'recv.start': 'कैमरा शुरू करें',
