@@ -15,17 +15,6 @@ interface AppState {
   playbackFps: PlaybackFps;
   setPlaybackFps: (fps: PlaybackFps) => void;
 
-  /**
-   * Whether the rate above was chosen by the user rather than measured.
-   *
-   * Until it is, the device probe is free to raise it to whatever the display
-   * can actually sustain — the fastest rate is the right default and only the
-   * device knows what that is. Once the user picks a rate, the probe stops
-   * overriding it, including across reloads.
-   */
-  fpsPicked: boolean;
-  pickPlaybackFps: (fps: PlaybackFps) => void;
-
   /** null = auto-select the best available backend. */
   detectorPreference: DetectorKind | null;
   setDetectorPreference: (kind: DetectorKind | null) => void;
@@ -52,9 +41,6 @@ export const useAppStore = create<AppState>()(
       playbackFps: DEFAULT_PLAYBACK_FPS,
       setPlaybackFps: (playbackFps) => set({ playbackFps }),
 
-      fpsPicked: false,
-      pickPlaybackFps: (playbackFps) => set({ playbackFps, fpsPicked: true }),
-
       detectorPreference: null,
       setDetectorPreference: (detectorPreference) => set({ detectorPreference }),
 
@@ -66,10 +52,24 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'qr-sender-settings',
-      version: 5,
+      version: 6,
       // Without this, a bumped version discards nothing but also migrates
       // nothing, and new fields silently arrive undefined for returning users.
-      migrate: (persisted) => persisted as never,
+      //
+      // The clamp is not decoration. A build that briefly offered 60fps wrote
+      // that value into storage, and rolling the option list back does not roll
+      // back what a user's browser already saved — the select would show no
+      // matching entry while the playback loop happily kept running at a rate
+      // no camera in the pairing can capture.
+      migrate: (persisted) => {
+        const state = persisted as Partial<AppState> | undefined;
+        if (state === undefined) return state as never;
+        const fps = state.playbackFps;
+        if (fps !== undefined && !PLAYBACK_FPS_OPTIONS.includes(fps)) {
+          return { ...state, playbackFps: DEFAULT_PLAYBACK_FPS } as never;
+        }
+        return state as never;
+      },
     },
   ),
 );

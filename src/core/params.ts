@@ -207,14 +207,7 @@ export const MANIFEST_INTERVAL = 40;
  * indoors would collapse it. The failure mode is a slower transfer, never a
  * corrupted one.
  */
-export const PLAYBACK_FPS_OPTIONS = [15, 20, 30, 60] as const;
-
-/**
- * Rates above this are only offered where the panel is measured to refresh that
- * fast — see `adviseRates`. Asking a 60Hz display for 60fps is right at its
- * limit and asking for more is aliasing, not speed.
- */
-export const HIGH_RATE_THRESHOLD = 60;
+export const PLAYBACK_FPS_OPTIONS = [15, 20, 30] as const;
 export const DEFAULT_PLAYBACK_FPS = DEFAULT_PLAYBACK_FPS_VALUE;
 
 /** Above this size the UI warns that the payload is outside the verified range. */

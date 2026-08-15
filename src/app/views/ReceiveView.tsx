@@ -24,7 +24,6 @@ import { CameraPermissionError, Scanner, type ScannerStats } from '../../platfor
 import { deleteTransfer, listTransfers, saveTransfer, type StoredTransfer } from '../../platform/storage.js';
 import { acquireWakeLock } from '../../platform/wakeLock.js';
 
-import { decodeCeilingFps } from '../../platform/displayRate.js';
 import { formatDuration, useT, type MessageKey } from '../i18n.js';
 import { useAppStore } from '../store.js';
 import { Viewer } from './Viewer.js';
@@ -164,7 +163,6 @@ export function ReceiveView(): JSX.Element {
   const [decodeFps, setDecodeFps] = useState(0);
   /** Best rate this device has reached, the reference the coaching compares against. */
   const [peakFps, setPeakFps] = useState(0);
-  const [ceilingFps, setCeilingFps] = useState(0);
   /** Useful symbols per second, measured. 0 means "not enough data yet". */
   const [symbolRate, setSymbolRate] = useState(0);
   const [engine, setEngine] = useState('');
@@ -292,14 +290,6 @@ export function ReceiveView(): JSX.Element {
             // itself; the crop factor only shrinks the decoder's search.
             (hw.zoom > 1.05 ? ` · zoom ${hw.zoom.toFixed(1)}` : '');
       setEngine((prev) => (prev === label ? prev : label));
-
-      // The number the sender cannot work out for itself. Playing faster than
-      // this device can capture and decode does not transfer anything sooner —
-      // the surplus frames are simply never seen. Surfacing it here is what
-      // turns the sender's rate selector from a guess into a setting.
-      const ceiling =
-        hw === null ? 0 : decodeCeilingFps(hw.concurrency, hw.latencyMs, hw.cameraFps);
-      setCeilingFps((prev) => (Math.abs(prev - ceiling) < 1 ? prev : Math.round(ceiling)));
       setSilent(now - lastReadAtRef.current >= SILENT_MS);
 
       const rateSamples = rateSamplesRef.current.filter((s) => now - s.at <= RATE_WINDOW_MS);
@@ -606,12 +596,6 @@ export function ReceiveView(): JSX.Element {
                 <dt>{t('common.detector')}</dt>
                 <dd style={{ fontSize: 13 }}>{engine}</dd>
               </div>
-              {ceilingFps > 0 && (
-                <div className="stat">
-                  <dt>{t('recv.ceilingLabel')}</dt>
-                  <dd>{t('receive.ceiling', { n: ceilingFps })}</dd>
-                </div>
-              )}
               <div className="stat">
                 <dt>{t('recv.remaining')}</dt>
                 <dd>{formatSeconds(etaSeconds)}</dd>
