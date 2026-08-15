@@ -207,12 +207,36 @@ export interface PaintOptions {
 
 /** Total edge length in device pixels for a symbol drawn at `scale`. */
 export function symbolSide(modules: number, scale: number): number {
-  return scale * (modules + QUIET_ZONE * 2);
+  return Math.round(scale * (modules + QUIET_ZONE * 2));
 }
 
 /** Largest integer module size that fits `devicePx`, never below one. */
 export function moduleScale(modules: number, devicePx: number): number {
   return Math.max(1, Math.floor(devicePx / (modules + QUIET_ZONE * 2)));
+}
+
+/**
+ * Module size that fills `devicePx` exactly, without rounding down.
+ *
+ * Flooring to a whole device pixel throws away everything below the next
+ * integer, and at the sizes that matter that is a lot: a V40 symbol on a 393pt
+ * phone at dpr 3 wants 5.85 device pixels per module and gets 5, so the symbol
+ * occupies 85% of the width it was given and the remaining 15% is white margin.
+ * Since pixels per module at the *camera* is the throughput lever, giving away
+ * 15% of the symbol's linear size is giving away the same share of the range
+ * and density the transfer could have used.
+ *
+ * The fractional size is safe because `paintQr` snaps module *edges* to whole
+ * device pixels rather than scaling module *rectangles*. Edges stay perfectly
+ * sharp — no antialiasing, no grey fringe, which is what actually hurt decoding
+ * when this was tried by simply stretching the canvas. Modules end up 5 or 6
+ * pixels wide instead of uniformly 5, and a decoder resolves the grid from the
+ * finder patterns rather than by assuming a constant pitch, so a sixth of a
+ * module of pitch variation is far inside what it already tolerates from
+ * perspective and lens distortion.
+ */
+export function moduleScaleExact(modules: number, devicePx: number): number {
+  return Math.max(1, devicePx / (modules + QUIET_ZONE * 2));
 }
 
 /**
@@ -239,8 +263,17 @@ export function paintQr(ctx: AnyCanvasContext, qr: RenderedQr, opts: PaintOption
     return;
   }
 
+  // Module boundaries, snapped to whole device pixels once up front. Snapping
+  // edges rather than sizes is what lets `scale` be fractional without any
+  // antialiasing: neighbouring modules share an edge value, so they meet exactly
+  // with no gap, no overlap, and no grey seam between them.
+  const edges = new Int32Array(n + 1);
+  for (let i = 0; i <= n; i++) edges[i] = Math.round(off + i * scale);
+
   for (let y = 0; y < n; y++) {
     const rowBase = y * n;
+    const y0 = edges[y];
+    const height = edges[y + 1] - y0;
     let x = 0;
     while (x < n) {
       if (data[rowBase + x] === 0) {
@@ -250,7 +283,7 @@ export function paintQr(ctx: AnyCanvasContext, qr: RenderedQr, opts: PaintOption
       // Coalesce horizontal runs into one fillRect — roughly 3x fewer draw calls.
       let run = 1;
       while (x + run < n && data[rowBase + x + run] !== 0) run++;
-      ctx.fillRect(off + x * scale, off + y * scale, run * scale, scale);
+      ctx.fillRect(edges[x], y0, edges[x + run] - edges[x], height);
       x += run;
     }
   }

@@ -28,7 +28,7 @@ import { buildPayload } from '../../core/payload.js';
 import { resolveMime } from '../../core/mime.js';
 import { Emitter } from '../../core/emitter.js';
 import { encode as base44Encode } from '../../core/base44.js';
-import { moduleScale, symbolSide } from '../../platform/qrRender.js';
+import { moduleScaleExact, symbolSide } from '../../platform/qrRender.js';
 import { createFramePainter, type FramePainter } from '../../platform/renderPool.js';
 import { acquireWakeLock, type WakeLockHandle } from '../../platform/wakeLock.js';
 import { estimateTransfer, formatBytes } from '../estimate.js';
@@ -46,6 +46,9 @@ const MIN_STAGE_CSS_SIZE = 200;
  * is kept as tight as the controls allow.
  */
 const STAGE_CHROME_PX = 132;
+
+/** Must match `.qr-stage` padding in the stylesheet. */
+const STAGE_PADDING_PX = 8;
 
 /**
  * `.qr-stage` is forced white in both themes so the symbol is never inverted —
@@ -73,7 +76,10 @@ function stageAreaEstimate(fullscreen = false): { width: number; height: number 
   // The playing stage breaks out of the shell's max-width, so the whole viewport
   // is available. A square symbol on a landscape screen wastes the horizontal
   // half of it, which is what makes tiling worth the complexity.
-  const width = Math.max(MIN_STAGE_CSS_SIZE, (globalThis.innerWidth ?? 400) - 32);
+  // Deduct the stage's own padding and nothing else. Every pixel held back
+  // here is white margin around the symbol, and on a portrait phone the width
+  // is what binds — so a spare 40px of caution costs real modules.
+  const width = Math.max(MIN_STAGE_CSS_SIZE, (globalThis.innerWidth ?? 400) - STAGE_PADDING_PX * 2);
   const reserved = fullscreen ? FULLSCREEN_CHROME_PX : STAGE_CHROME_PX;
   const height = Math.max(MIN_STAGE_CSS_SIZE, (globalThis.innerHeight ?? 700) - reserved);
   return { width, height };
@@ -182,7 +188,7 @@ export function SendView(): JSX.Element {
     if (canvas === null || canvas === undefined) return;
 
     const dpr = globalThis.devicePixelRatio || 1;
-    const scale = moduleScale(phase.profile.modules, Math.floor(stageSizeRef.current * dpr));
+    const scale = moduleScaleExact(phase.profile.modules, Math.floor(stageSizeRef.current * dpr));
     const side = symbolSide(phase.profile.modules, scale);
     canvas.width = side;
     canvas.height = side;
@@ -294,7 +300,7 @@ export function SendView(): JSX.Element {
   // circular and yields a near-zero first reading.
   useEffect(() => {
     if (phase.kind !== 'playing') return;
-    const fitted = Math.floor(Math.min(stageArea.width - 24, stageArea.height - 24));
+    const fitted = Math.floor(Math.min(stageArea.width, stageArea.height));
     stageSizeRef.current = Math.max(MIN_STAGE_CSS_SIZE, fitted);
 
     const canvas = tileRefs.current[0];
@@ -302,7 +308,7 @@ export function SendView(): JSX.Element {
     if (canvas === null || canvas === undefined || painter === null) return;
 
     const dpr = globalThis.devicePixelRatio || 1;
-    const scale = moduleScale(phase.profile.modules, Math.floor(stageSizeRef.current * dpr));
+    const scale = moduleScaleExact(phase.profile.modules, Math.floor(stageSizeRef.current * dpr));
     const side = symbolSide(phase.profile.modules, scale);
     if (canvas.width !== side) {
       canvas.width = side;
