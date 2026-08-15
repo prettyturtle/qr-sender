@@ -83,8 +83,11 @@ body {
      status bar and the home indicator, which is what lets the background run
      edge to edge — but it also means nothing reserves that space unless we do.
      All four insets, not just the bottom: a notch is on the side in landscape. */
+  /* The top inset lives on the sticky masthead instead, so that the bar which
+     stays on screen is the thing covering the status bar area — a gap here
+     would let content scroll through it. */
   padding:
-    env(safe-area-inset-top)
+    0
     calc(16px + env(safe-area-inset-right))
     calc(24px + env(safe-area-inset-bottom))
     calc(16px + env(safe-area-inset-left));
@@ -95,7 +98,35 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 20px 0 12px;
+  padding: calc(20px + env(safe-area-inset-top)) 0 12px;
+  position: sticky;
+  top: 0;
+  /* Above the stage, which bleeds the full viewport width and would otherwise
+     paint its white card straight over the bar as it scrolls past. */
+  z-index: 20;
+}
+
+/*
+ * The bar's background, painted the full width of the viewport.
+ *
+ * The shell is capped at 760px but the playing stage deliberately breaks out to
+ * 100vw, so a background bounded by the shell would let that white card scroll
+ * past in the margins beside the header on a wide screen. The content stays
+ * inside the shell; only the fill escapes it.
+ */
+.masthead::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 100vw;
+  transform: translateX(-50%);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  /* Behind the title and buttons, but still inside the stacking context the
+     `z-index: 20` above creates — so it cannot fall behind the page. */
+  z-index: -1;
 }
 
 .brand {
