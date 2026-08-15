@@ -64,17 +64,26 @@ export const QUIET_ZONE_MODULES = 4;
 export const DESIGN_MAX_VERSION = 25;
 
 /**
- * CSS pixels per module the shipping configuration actually achieves: a phone in
- * portrait gives the stage about 318 CSS px, and V25 at 125 total modules works
- * there today. Used as the calibration floor so no device is ever downgraded
- * below what is already known to decode. Holding this constant keeps the *physical*
+ * CSS pixels per module — a proxy for the symbol's *physical* size on screen.
+ *
+ * This is a softer constraint than it looks. Physical module size does not
+ * decide whether a symbol can be read; it decides how close the camera has to
+ * be. A 1080p sensor framing the symbol at 70% of the frame resolves about 250
+ * modules across, and V40 uses 185 — so the version is within reach of any
+ * screen, at the cost of holding the camera nearer.
+ *
+ * It was 2.5, back-calculated from V25 on a phone. Lowering it to 2.0 lets a
+ * phone in portrait carry V30 instead of V25 — 37% more payload per frame — and
+ * the failure mode if the user holds the camera too far away is a slower
+ * transfer, never a wrong one. The hard floor is the device-pixel one below:
+ * that one is about whether the screen can draw distinct modules at all. Holding this constant keeps the *physical*
  * module size identical as the version climbs, so a camera at the same distance
  * resolves it just as well — the symbol simply grows.
  */
-const MIN_CSS_PX_PER_MODULE = 2.5;
+export const MIN_CSS_PX_PER_MODULE = 2.0;
 
 /** Below three device pixels a module degrades into LCD subpixel and moire noise. */
-const MIN_DEVICE_PX_PER_MODULE = 3;
+export const MIN_DEVICE_PX_PER_MODULE = 3;
 
 /**
  * Largest QR version the sending screen can display without shrinking modules
@@ -188,6 +197,8 @@ export const MANIFEST_INTERVAL = 40;
  * Playback rates must divide 30 and 60 so each frame is held for at least two
  * camera frames.
  *
+ * Three tiers, all divisors of 30 and 60. 15 holds each symbol for four camera
+ * frames at 60fps and two even on a 30fps camera, so it works everywhere.
  * 20 is the default. On a 60fps camera that holds each symbol for three frames,
  * so at least two are captured cleanly even with the screen and shutter beating
  * against each other at a fixed phase. 30 doubles throughput over 15 but leaves
@@ -196,7 +207,7 @@ export const MANIFEST_INTERVAL = 40;
  * indoors would collapse it. The failure mode is a slower transfer, never a
  * corrupted one.
  */
-export const PLAYBACK_FPS_OPTIONS = [10, 12, 15, 20, 30] as const;
+export const PLAYBACK_FPS_OPTIONS = [15, 20, 30] as const;
 export const DEFAULT_PLAYBACK_FPS = DEFAULT_PLAYBACK_FPS_VALUE;
 
 /** Above this size the UI warns that the payload is outside the verified range. */

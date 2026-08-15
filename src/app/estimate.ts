@@ -17,15 +17,28 @@ export const MANIFEST_TAX = (MANIFEST_INTERVAL + 1) / MANIFEST_INTERVAL;
 export const DATA_FRAME_RATIO = MANIFEST_INTERVAL / (MANIFEST_INTERVAL + 1);
 
 export interface ReceiverProfile {
-  id: 'android' | 'desktop' | 'ios';
-  /** Frames per second the receiver can decode — the real throughput limiter. */
+  id: 'fast' | 'slow';
+  /** Ceiling on how many frames per second this class of receiver can decode. */
   decodeFps: number;
 }
 
+/**
+ * Two classes, not three platforms.
+ *
+ * These used to be per-platform constants of 8, 6 and 4 fps, measured when the
+ * receiver decoded one frame at a time on the main thread. Decoding now runs
+ * across a worker per core, so a current device keeps up with anything the
+ * sender can display and the *playback rate* is what binds — which is exactly
+ * what the old constants hid: with every value below 10, `min(decodeFps, fps)`
+ * ignored the playback rate entirely and the estimate did not move when the
+ * user changed it.
+ *
+ * `fast` is therefore playback-bound by construction. `slow` stands in for an
+ * older phone or a browser without workers.
+ */
 export const RECEIVER_PROFILES: ReceiverProfile[] = [
-  { id: 'android', decodeFps: 8 },
-  { id: 'desktop', decodeFps: 6 },
-  { id: 'ios', decodeFps: 4 },
+  { id: 'fast', decodeFps: 60 },
+  { id: 'slow', decodeFps: 10 },
 ];
 
 export interface TransferEstimate {

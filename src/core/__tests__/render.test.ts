@@ -13,6 +13,8 @@ import { encode } from '../base44.js';
 import {
   DEFAULT_N,
   DESIGN_MAX_VERSION,
+  MIN_CSS_PX_PER_MODULE,
+  MIN_DEVICE_PX_PER_MODULE,
   PROFILE_LADDER,
   QR_PROFILES,
   chooseProfile,
@@ -45,10 +47,10 @@ describe('adaptive QR profile', () => {
     expect(chooseProfile(318, 3, DESIGN_MAX_VERSION).version).toBe(25);
   });
 
-  it('keeps a portrait phone on the profile that already works', () => {
+  it('gives a portrait phone the densest symbol its screen can draw', () => {
     // ~318 CSS px is what the stage gets on a 390px viewport.
-    expect(chooseProfile(318, 3).version).toBe(25);
-    expect(chooseProfile(318, 2).version).toBe(25);
+    expect(chooseProfile(318, 3).version).toBe(30);
+    expect(chooseProfile(318, 2).version).toBe(30);
   });
 
   it('climbs to V40 on a desktop-width stage', () => {
@@ -58,14 +60,19 @@ describe('adaptive QR profile', () => {
 
   it('steps down on a small phone rather than shrinking modules', () => {
     // A 320px viewport leaves the stage ~248 CSS px.
-    expect(chooseProfile(248, 2).version).toBe(15);
-    expect(chooseProfile(260, 2).version).toBe(15);
+    expect(chooseProfile(248, 2).version).toBe(20);
+    expect(chooseProfile(260, 2).version).toBe(25);
   });
 
   it('honours both module-size floors wherever any profile can', () => {
+    // Read the floors from the source rather than restating them: a duplicated
+    // constant is what let this test pass while the real one had moved.
     const ok = (p: (typeof PROFILE_LADDER)[number], css: number, dpr: number): boolean => {
       const total = p.modules + 8;
-      return css / total >= 2.5 && Math.floor((css * dpr) / total) >= 3;
+      return (
+        css / total >= MIN_CSS_PX_PER_MODULE &&
+        Math.floor((css * dpr) / total) >= MIN_DEVICE_PX_PER_MODULE
+      );
     };
 
     for (const css of [248, 318, 400, 500, 688, 1400]) {
@@ -87,7 +94,7 @@ describe('adaptive QR profile', () => {
   it('falls back to the smallest profile when nothing can satisfy the floors', () => {
     // Below any real device width there is no good answer; returning the
     // smallest symbol is best-effort rather than a promise.
-    expect(chooseProfile(120, 1).version).toBe(15);
+    expect(chooseProfile(120, 1)).toBe(PROFILE_LADDER[0]);
   });
 
   it('V40 carries more than twice V25', () => {

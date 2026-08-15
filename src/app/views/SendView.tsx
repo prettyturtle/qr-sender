@@ -33,7 +33,7 @@ import { drawQr, moduleScale, symbolSide } from '../../platform/qrRender.js';
 import { createFramePainter, type FramePainter } from '../../platform/renderPool.js';
 import { acquireWakeLock, type WakeLockHandle } from '../../platform/wakeLock.js';
 import { estimateTransfer, formatBytes } from '../estimate.js';
-import { formatDuration, useT } from '../i18n.js';
+import { formatDuration, useT, type MessageKey } from '../i18n.js';
 import { useAppStore, type PlaybackFps, type QrStyle } from '../store.js';
 import { QR_COLORS } from '../palette.js';
 
@@ -42,8 +42,12 @@ const TEXT_FILENAME = 'message.txt';
 
 const SIDE_QR_CSS_SIZE = 108;
 const MIN_STAGE_CSS_SIZE = 200;
-/** Stage chrome (side QR, caption, controls) reserved when fitting to height. */
-const STAGE_CHROME_PX = 200;
+/**
+ * Vertical space reserved for the stage's own chrome. Every pixel not reserved
+ * goes into the symbol, and a larger symbol is directly more decodable, so this
+ * is kept as tight as the controls allow.
+ */
+const STAGE_CHROME_PX = 132;
 
 /**
  * `.qr-stage` is forced white in both themes so the symbol is never inverted —
@@ -654,10 +658,11 @@ export function SendView(): JSX.Element {
           >
             {PLAYBACK_FPS_OPTIONS.map((option) => (
               <option key={option} value={option}>
-                {`${option} fps`}
+                {`${option} fps · ${t(`send.fps${option}` as MessageKey)}`}
               </option>
             ))}
           </select>
+          {fps === 30 && <span className="mono">{t('send.fps30Note')}</span>}
         </div>
 
         <div className="field" style={{ marginTop: 14 }}>
