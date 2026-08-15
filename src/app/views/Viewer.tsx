@@ -21,6 +21,7 @@ import { sanitizeFilename, sanitizeMime } from '../../core/filename.js';
 import { resolveMime } from '../../core/mime.js';
 import { formatBytes } from '../estimate.js';
 import { useT, type MessageKey, type Translate } from '../i18n.js';
+import { nativePdfViewerAvailable, renderPdf, type RenderedPdf } from '../../platform/pdf.js';
 import { classifyPreview, fontFormat, fontSpecimen, isTextual, type Preview } from '../preview.js';
 
 export interface ViewerProps {
@@ -68,6 +69,8 @@ export function Viewer({ name, mime, data, integrity, onReset }: ViewerProps): J
 
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
+  const [pdfPages, setPdfPages] = useState<RenderedPdf | null>(null);
+  const [pdfState, setPdfState] = useState<'idle' | 'rendering' | 'failed'>('idle');
 
   // Created inside effects rather than memos so a StrictMode double-mount hands
   // out fresh URLs instead of reusing ones it has already revoked.
@@ -89,6 +92,39 @@ export function Viewer({ name, mime, data, integrity, onReset }: ViewerProps): J
     setMediaUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [data, resolved, needsMediaUrl]);
+
+  // iOS Safari renders nothing for a PDF in an iframe, so where the platform
+  // viewer is unavailable the pages are rasterised here instead. The renderer is
+  // a dynamic import: a user who never receives a PDF never downloads it.
+  const needsPdfFallback = preview.kind === 'pdf' && !nativePdfViewerAvailable();
+
+  useEffect(() => {
+    if (!needsPdfFallback) {
+      setPdfPages(null);
+      setPdfState('idle');
+      return;
+    }
+    const controller = new AbortController();
+    let rendered: RenderedPdf | null = null;
+    setPdfState('rendering');
+    void renderPdf(data, controller.signal)
+      .then((result) => {
+        if (controller.signal.aborted) {
+          for (const url of result.pages) URL.revokeObjectURL(url);
+          return;
+        }
+        rendered = result;
+        setPdfPages(result);
+        setPdfState('idle');
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setPdfState('failed');
+      });
+    return () => {
+      controller.abort();
+      for (const url of rendered?.pages ?? []) URL.revokeObjectURL(url);
+    };
+  }, [needsPdfFallback, data]);
 
   useEffect(() => {
     if (!copied) return;
@@ -163,6 +199,8 @@ export function Viewer({ name, mime, data, integrity, onReset }: ViewerProps): J
           showSource={showSource}
           mediaUrl={mediaUrl}
           fontDoc={fontDoc}
+          pdfPages={pdfPages}
+          pdfState={pdfState}
           name={safeName}
           t={t}
         />
@@ -196,11 +234,22 @@ interface BodyProps {
   showSource: boolean;
   mediaUrl: string | null;
   fontDoc: string | null;
+  pdfPages: RenderedPdf | null;
+  pdfState: 'idle' | 'rendering' | 'failed';
   name: string;
   t: Translate;
 }
 
-function PreviewBody({ preview, showSource, mediaUrl, fontDoc, name, t }: BodyProps): JSX.Element {
+function PreviewBody({
+  preview,
+  showSource,
+  mediaUrl,
+  fontDoc,
+  pdfPages,
+  pdfState,
+  name,
+  t,
+}: BodyProps): JSX.Element {
   switch (preview.kind) {
     case 'image':
       if (showSource && preview.svgSource !== undefined) {
@@ -231,6 +280,29 @@ function PreviewBody({ preview, showSource, mediaUrl, fontDoc, name, t }: BodyPr
       );
 
     case 'pdf':
+      if (pdfPages !== null) {
+        return (
+          <>
+            <div className="preview-box">
+              {pdfPages.pages.map((url, i) => (
+                <img key={url} src={url} alt={`${name} — ${i + 1}`} className="pdf-page" />
+              ))}
+            </div>
+            <p className="mono" style={{ marginBottom: 0 }}>
+              {t('view.pdfPages', { shown: pdfPages.pages.length, total: pdfPages.totalPages })}
+            </p>
+          </>
+        );
+      }
+      if (pdfState === 'rendering') {
+        return (
+          <p className="notice">
+            <span className="spinner" aria-hidden="true" />
+            {t('view.pdfRendering')}
+          </p>
+        );
+      }
+      if (pdfState === 'failed') return <p className="notice">{t('view.pdfFailed')}</p>;
       // The blob's declared type pins interpretation, so the frame renders as a
       // PDF whatever the bytes are. No sandbox here: an opaque origin cannot load
       // a blob URL this document created, which would leave the frame blank.

@@ -13,6 +13,22 @@ export default defineConfig({
         // fails outright on every browser that lacks BarcodeDetector (iOS Safari
         // included), which is the majority of receivers.
         globPatterns: ['**/*.{js,css,html,svg,png,ico,wasm,woff2}'],
+        // The PDF renderer is 2.5MB and only matters when a PDF actually
+        // arrives, so it is fetched on demand and cached from then on rather
+        // than tripling what every user downloads up front. Receiving, decoding
+        // and downloading all work offline regardless; only the first PDF
+        // *preview* needs a network.
+        globIgnores: ['**/pdf*.{js,mjs}'],
+        runtimeCaching: [
+          {
+            urlPattern: /\/assets\/pdf.*\.(?:js|mjs)$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'pdf-renderer',
+              expiration: { maxEntries: 4 },
+            },
+          },
+        ],
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
         navigateFallback: 'index.html',
       },

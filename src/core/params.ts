@@ -89,78 +89,24 @@ const MIN_DEVICE_PX_PER_MODULE = 3;
  * proxy. Guessing high degrades decode rate but never correctness: the carousel
  * simply takes longer.
  */
-export interface StageLayout {
-  cols: number;
-  rows: number;
-  profile: QrProfile;
-  /** Edge length in CSS pixels of one tile. */
-  tileSize: number;
-  /** Payload bytes displayed per tick. */
-  bytesPerTick: number;
-}
-
-/** Arrangements worth considering, smallest first. */
-const LAYOUTS: ReadonlyArray<[number, number]> = [
-  [1, 1],
-  [2, 1],
-  [1, 2],
-  [2, 2],
-  [3, 1],
-  [3, 2],
-];
-
 /**
- * Choose how many symbols to display at once, and at what version.
+ * Tiling — displaying several symbols at once — was tried and removed.
  *
- * A QR symbol is square but a screen is not. On a 16:9 display a single symbol
- * is limited by the *height* and leaves roughly forty percent of the width
- * unused — so two symbols side by side cost only about a tenth of the module
- * size while doubling the payload per tick. Every frame is self-describing, so
- * the receiver needs no notion of tiling: it just decodes whatever it sees.
+ * The arithmetic looked good: a square symbol wastes the horizontal half of a
+ * landscape screen, so two or three side by side promised 2-3x the payload for
+ * a small loss in module size. That reasoning checks the module size against the
+ * *sending* screen, which is the wrong budget.
  *
- * The search maximises bytes per tick subject to the same module-size floors a
- * single symbol has to clear, which is what keeps this from quietly trading
- * decodability for throughput.
+ * The binding constraint is the receiving camera. A symbol typically fills about
+ * 70% of the frame, so a 1080-pixel sensor offers roughly 250 modules across at
+ * the three-pixels-per-module floor. A single V40 uses 185 of them. Three across
+ * needs 555 — it cannot be captured at all, which is exactly what happened on a
+ * real phone. Even two across is marginal once framing is imperfect.
+ *
+ * The sender cannot see the receiver's camera, so tiling is a bet on an unknown
+ * budget. Payload per frame has to come from the symbol itself, and V40 is
+ * already the largest QR version there is.
  */
-export function chooseLayout(
-  stageWidth: number,
-  stageHeight: number,
-  devicePixelRatio = 1,
-  maxVersion = 40,
-  maxTiles = 4,
-): StageLayout {
-  let best: StageLayout | null = null;
-
-  for (const [cols, rows] of LAYOUTS) {
-    if (cols * rows > maxTiles) continue;
-    // Tiles are square and equal, so the limiting dimension sets the size.
-    const gap = 8 * (Math.max(cols, rows) - 1);
-    const tileSize = Math.floor(Math.min((stageWidth - gap) / cols, (stageHeight - gap) / rows));
-    if (tileSize < 120) continue;
-
-    const profile = chooseProfile(tileSize, devicePixelRatio, maxVersion);
-    // A layout only counts if its tiles clear the floors on their own merits.
-    const total = profile.modules + QUIET_ZONE_MODULES * 2;
-    if (tileSize / total < MIN_CSS_PX_PER_MODULE) continue;
-    if (Math.floor((tileSize * devicePixelRatio) / total) < MIN_DEVICE_PX_PER_MODULE) continue;
-
-    const bytesPerTick = cols * rows * profile.blockSize;
-    if (best === null || bytesPerTick > best.bytesPerTick) {
-      best = { cols, rows, profile, tileSize, bytesPerTick };
-    }
-  }
-
-  if (best !== null) return best;
-  const profile = chooseProfile(Math.min(stageWidth, stageHeight), devicePixelRatio, maxVersion);
-  return {
-    cols: 1,
-    rows: 1,
-    profile,
-    tileSize: Math.min(stageWidth, stageHeight),
-    bytesPerTick: profile.blockSize,
-  };
-}
-
 export function chooseProfile(
   stageCssSize: number,
   devicePixelRatio = 1,

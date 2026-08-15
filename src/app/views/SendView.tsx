@@ -20,8 +20,8 @@ import QRCode from 'qrcode';
 import {
   DEFAULT_N,
   DESIGN_MAX_VERSION,
-  chooseLayout,
-  type StageLayout,
+  chooseProfile,
+  type QrProfile,
   PLAYBACK_FPS_OPTIONS,
   maxKForFps,
 } from '../../core/params.js';
@@ -56,8 +56,8 @@ type Source = { kind: 'file'; file: File } | { kind: 'text'; text: string };
 type Phase =
   | { kind: 'idle' }
   | { kind: 'preparing' }
-  /** The layout is fixed for the life of a stream: `blockSize` is in every header. */
-  | { kind: 'playing'; emitter: Emitter; layout: StageLayout };
+  /** The profile is fixed for the life of a stream: `blockSize` is in every header. */
+  | { kind: 'playing'; emitter: Emitter; profile: QrProfile };
 
 /**
  * Width the stage will get, computed before it exists so the QR version can be
@@ -99,14 +99,13 @@ export function SendView(): JSX.Element {
 
   // Payload per tick is the throughput lever: a denser symbol where the screen
   // can resolve it, and more than one symbol where the screen has room.
-  const layout = useMemo(
+  // The symbol is square, so the smaller screen dimension is what it has to fit.
+  const profile = useMemo(
     () =>
-      chooseLayout(
-        stageArea.width,
-        stageArea.height,
+      chooseProfile(
+        Math.min(stageArea.width, stageArea.height),
         globalThis.devicePixelRatio || 1,
         designPriority ? DESIGN_MAX_VERSION : undefined,
-        designPriority ? 1 : undefined,
       ),
     [stageArea, designPriority],
   );
@@ -156,9 +155,9 @@ export function SendView(): JSX.Element {
   const estimate = useMemo(
     () =>
       sourceBytes > 0
-        ? estimateTransfer(sourceBytes, layout.profile, maxKForFps(fps), fps, layout.cols * layout.rows)
+        ? estimateTransfer(sourceBytes, profile, maxKForFps(fps), fps)
         : null,
-    [sourceBytes, layout, fps],
+    [sourceBytes, profile, fps],
   );
 
   const receiveUrl = useMemo(() => {
@@ -173,10 +172,9 @@ export function SendView(): JSX.Element {
   useEffect(() => {
     if (phase.kind !== 'playing') return;
     const emitter = phase.emitter;
-    const tiles = emitter.isStatic ? 1 : phase.layout.cols * phase.layout.rows;
     const style = { dark: qrColor, rounded: qrRounded };
 
-    const nextFrame = (): RenderedQr => buildQr(base44Encode(emitter.next()), phase.layout.profile);
+    const nextFrame = (): RenderedQr => buildQr(base44Encode(emitter.next()), phase.profile);
 
     // A transfer that fits in one frame has nothing to animate. Draw it once and
     // leave it on screen — no timer, no repaint, and any scanner gets it in a
@@ -193,21 +191,16 @@ export function SendView(): JSX.Element {
 
     let raf = 0;
     let last = -1;
-    let pending: RenderedQr[] | null = null;
-
-    const buildBatch = (): RenderedQr[] => Array.from({ length: tiles }, nextFrame);
+    let pending: RenderedQr | null = null;
 
     const show = (): void => {
-      const batch = pending ?? buildBatch();
-      for (let i = 0; i < tiles; i++) {
-        const canvas = tileRefs.current[i];
-        if (canvas === null || canvas === undefined) continue;
-        drawQr(canvas, batch[i], { cssSize: stageSizeRef.current, ...style });
-      }
-      // One-tick lookahead: build the *next* batch right after painting so the
+      const canvas = tileRefs.current[0];
+      if (canvas === null || canvas === undefined) return;
+      drawQr(canvas, pending ?? nextFrame(), { cssSize: stageSizeRef.current, ...style });
+      // One-frame lookahead: build the *next* symbol right after painting so the
       // encode cost lands in the idle tail of the period instead of between the
       // deadline and the paint, where it would show up as playback jitter.
-      pending = buildBatch();
+      pending = nextFrame();
     };
 
     const tick = (now: number): void => {
@@ -249,11 +242,7 @@ export function SendView(): JSX.Element {
   // circular and yields a near-zero first reading.
   useEffect(() => {
     if (phase.kind !== 'playing') return;
-    const { cols, rows, tileSize } = phase.layout;
-    const gap = 8 * (Math.max(cols, rows) - 1);
-    const width = (stageArea.width - 24 - gap) / cols;
-    const height = (stageArea.height - 24 - gap) / rows;
-    const fitted = Math.floor(Math.min(width, height, tileSize));
+    const fitted = Math.floor(Math.min(stageArea.width - 24, stageArea.height - 24));
     stageSizeRef.current = Math.max(MIN_STAGE_CSS_SIZE, fitted);
   }, [phase, stageArea, fullscreen]);
 
@@ -378,13 +367,13 @@ export function SendView(): JSX.Element {
         // receiver's share of each carousel cycle.
         k: maxKForFps(fps),
         n: DEFAULT_N,
-        blockSize: layout.profile.blockSize,
+        blockSize: profile.blockSize,
       });
       if (stale()) return;
 
       setPhase({
         kind: 'playing',
-        layout,
+        profile,
         emitter: new Emitter({
           payload: built.payload,
           manifest: built.manifest,
@@ -424,26 +413,16 @@ export function SendView(): JSX.Element {
 
   if (phase.kind === 'playing') {
     const emitter = phase.emitter;
-    const tileCount = emitter.isStatic ? 1 : phase.layout.cols * phase.layout.rows;
-    const tileCols = emitter.isStatic ? 1 : phase.layout.cols;
     return (
       <>
         <div className={fullscreen ? 'qr-stage bleed fullscreen' : 'qr-stage bleed'} ref={stageRef}>
-          <div
-            className="tile-grid"
-            style={{ gridTemplateColumns: `repeat(${tileCols}, max-content)` }}
+          <canvas
+            ref={(el) => {
+              tileRefs.current[0] = el;
+            }}
             aria-label={t('app.send')}
             role="img"
-          >
-            {Array.from({ length: tileCount }, (_, i) => (
-              <canvas
-                key={i}
-                ref={(el) => {
-                  tileRefs.current[i] = el;
-                }}
-              />
-            ))}
-          </div>
+          />
 
           <div className="qr-side">
             <canvas ref={sideCanvasRef} aria-hidden="true" />

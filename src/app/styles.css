@@ -477,12 +477,6 @@ select:focus-visible,
   padding: 12px;
 }
 
-.tile-grid {
-  display: grid;
-  gap: 8px;
-  justify-content: center;
-  align-content: center;
-}
 
 .qr-side {
   display: flex;
@@ -621,6 +615,18 @@ select:focus-visible,
 .preview-box.flush video {
   border-radius: 0;
   background: #000;
+}
+
+.pdf-page {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+
+.pdf-page + .pdf-page {
+  margin-top: 10px;
 }
 
 .doc-frame {

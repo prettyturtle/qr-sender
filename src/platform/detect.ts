@@ -88,8 +88,10 @@ async function createZxingDetector(): Promise<FrameDetector> {
         tryHarder: false,
         tryRotate: false,
         tryInvert: false,
-        // A sender may tile up to six symbols across a wide screen.
-        maxNumberOfSymbols: 8,
+        // Exactly one symbol is ever on screen, and saying so lets the decoder
+        // stop at the first hit instead of scanning the rest of the image —
+        // decode rate is the other half of the throughput product.
+        maxNumberOfSymbols: 1,
       });
       return results.map((r) => r.text);
     },
