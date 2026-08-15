@@ -79,7 +79,15 @@ body {
   flex-direction: column;
   max-width: 760px;
   margin: 0 auto;
-  padding: 0 16px calc(24px + env(safe-area-inset-bottom));
+  /* `viewport-fit=cover` plus `black-translucent` puts the web view *under* the
+     status bar and the home indicator, which is what lets the background run
+     edge to edge — but it also means nothing reserves that space unless we do.
+     All four insets, not just the bottom: a notch is on the side in landscape. */
+  padding:
+    env(safe-area-inset-top)
+    calc(16px + env(safe-area-inset-right))
+    calc(24px + env(safe-area-inset-bottom))
+    calc(16px + env(safe-area-inset-left));
 }
 
 .masthead {
@@ -700,9 +708,15 @@ select:focus-visible,
 .qr-stage.bleed {
   width: 100vw;
   max-width: 100vw;
-  margin-left: calc(50% - 50vw);
+  /* Breaks out of the shell's padding, insets included: the symbol wants the
+     whole width, and the shell's own margin is centred so this stays centred. */
+  /* The shell centres its *border* box, so unequal left/right insets shift its
+     content box off centre by half their difference — and this margin is
+     measured from that content box. Without the correction the stage drifts
+     under the notch on one side in landscape. */
+  margin-left: calc(50% - 50vw - env(safe-area-inset-left) / 2 + env(safe-area-inset-right) / 2);
   border-radius: 0;
-  padding: 12px;
+  padding: 8px;
 }
 
 
@@ -732,8 +746,8 @@ select:focus-visible,
 
 .qr-controls.fullscreen {
   position: fixed;
-  right: 12px;
-  bottom: 12px;
+  right: calc(12px + env(safe-area-inset-right));
+  bottom: calc(12px + env(safe-area-inset-bottom));
   z-index: 51;
   margin: 0;
   opacity: 0.55;

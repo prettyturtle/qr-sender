@@ -21,7 +21,12 @@
          the app opens in a Safari chrome *and* every startup image below is ignored. -->
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- `default`, not `black-translucent`. Translucent draws the web view under
+         the status bar and forces its text white, which is correct on this
+         app's dark theme and invisible on its light one. `default` follows the
+         system appearance instead, so the clock stays readable either way, and
+         iOS reserves the bar rather than leaving the app to inset around it. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="QR Sender" />
     <title>QR Sender</title>
 
