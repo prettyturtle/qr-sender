@@ -8,37 +8,43 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { GRID, glyph, encodePng, fillBackground, drawGlyph } from './lib/render.mjs';
+import { GRADIENT, encodePng, fillGradient, drawGlyph, hex, markSvg } from './lib/render.mjs';
 
 const OUT = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 mkdirSync(OUT, { recursive: true });
 
+const WHITE = [0xff, 0xff, 0xff];
+
 /**
- * `safeArea` is the fraction of the icon edge the glyph spans.
+ * `safeArea` is the fraction of the icon edge the mark spans.
  *
  * A maskable icon may be cropped to a circle of 80% diameter, so a *square*
- * glyph has to fit inside that circle: 0.8 / sqrt(2) = 0.566 is the largest
- * side that never clips a corner. The `any` variant has no such constraint and
- * fills 0.8 so the glyph does not look lost inside its own padding.
+ * mark has to fit inside that circle: 0.8 / sqrt(2) = 0.566 is the largest side
+ * that never clips a corner. The `any` variant has no such constraint.
+ *
+ * The artwork bleeds to the edge rather than drawing its own rounded corners.
+ * Every platform that shows these applies its own mask — iOS a squircle,
+ * Android whatever the launcher picked — and art that rounds itself first ends
+ * up with a dark crescent trapped between the two curves.
  */
-function renderIcon(size, { safeArea = 0.8 } = {}) {
+function renderIcon(size, { safeArea = 0.66 } = {}) {
   const rgba = new Uint8Array(size * size * 4);
-  fillBackground(rgba);
-  drawGlyph(rgba, size, { art: size * safeArea, cx: size / 2, cy: size / 2 });
+  fillGradient(rgba, size, size);
+  drawGlyph(rgba, size, { art: size * safeArea, cx: size / 2, cy: size / 2, colour: WHITE });
   return encodePng(rgba, size, size);
 }
 
-const svgCells = glyph()
-  .flatMap((row, y) =>
-    row.map((on, x) =>
-      on ? `<rect x="${x + 0.05}" y="${y + 0.05}" width="0.9" height="0.9" rx="0.12"/>` : '',
-    ),
-  )
-  .join('');
-
-const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${GRID} ${GRID}">
-  <rect width="${GRID}" height="${GRID}" rx="2.2" fill="#0e0e11"/>
-  <g fill="#5b8cff">${svgCells}</g>
+// The SVG favicon is the one place the art is shown unmasked, at tab size, so
+// it keeps its own rounded corners.
+const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="${hex(GRADIENT.from)}"/>
+      <stop offset="1" stop-color="${hex(GRADIENT.to)}"/>
+    </linearGradient>
+  </defs>
+  <rect width="10" height="10" rx="2.2" fill="url(#g)"/>
+  <g transform="translate(1.5 1.5)">${markSvg('#ffffff')}</g>
 </svg>
 `;
 

@@ -525,6 +525,41 @@ select:focus-visible,
 
 /* The QR itself is always pure black on pure white regardless of theme —
    inverting it costs detection rate on every camera. */
+/* Both dialogs share the shell, so they share its chrome. */
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-head h2 {
+  margin: 0;
+}
+
+/* Top-right rather than a button in the footer: it is where a close control is
+   looked for, and it does not move as the dialog's content grows. */
+.modal-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin: -4px -4px 0 0;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.modal-close:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
 .settings-dialog {
   border: none;
   border-radius: var(--radius);
@@ -536,7 +571,8 @@ select:focus-visible,
   color: var(--text);
 }
 
-.settings-dialog::backdrop {
+.settings-dialog::backdrop,
+.share-dialog::backdrop {
   background: rgb(0 0 0 / 55%);
 }
 

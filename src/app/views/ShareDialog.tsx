@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { moduleScale, paintQr, symbolSide } from '../../platform/qrRender.js';
 import { useT } from '../i18n.js';
+import { Modal } from './Modal.js';
 
 /** Module colour. Deep enough to clear the contrast floor against white by a wide margin. */
 const SHARE_DARK = '#1b3a8f';
@@ -36,17 +37,9 @@ function shareUrl(): string {
 
 export function ShareDialog({ open, onClose }: ShareDialogProps): JSX.Element | null {
   const t = useT();
-  const dialogRef = useRef<HTMLDialogElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [copied, setCopied] = useState(false);
   const url = shareUrl();
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (dialog === null) return;
-    if (open && !dialog.open) dialog.showModal();
-    if (!open && dialog.open) dialog.close();
-  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -97,17 +90,7 @@ export function ShareDialog({ open, onClose }: ShareDialogProps): JSX.Element | 
   const canNativeShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
 
   return (
-    <dialog
-      ref={dialogRef}
-      className="share-dialog"
-      onClose={onClose}
-      onClick={(event) => {
-        // A click on the backdrop lands on the dialog element itself.
-        if (event.target === dialogRef.current) onClose();
-      }}
-    >
-      <h2>{t('share.title')}</h2>
-
+    <Modal open={open} onClose={onClose} title={t('share.title')} className="share-dialog">
       <div className="share-url">
         <input
           type="text"
@@ -127,16 +110,13 @@ export function ShareDialog({ open, onClose }: ShareDialogProps): JSX.Element | 
 
       <p className="share-note">{t('share.hint')}</p>
 
-      <div className="btn-row" style={{ justifyContent: 'center' }}>
-        {canNativeShare && (
+      {canNativeShare && (
+        <div className="btn-row" style={{ justifyContent: 'center' }}>
           <button type="button" className="btn" onClick={() => void nativeShare()}>
             {t('share.native')}
           </button>
-        )}
-        <button type="button" className="btn" onClick={onClose}>
-          {t('common.close')}
-        </button>
-      </div>
-    </dialog>
+        </div>
+      )}
+    </Modal>
   );
 }

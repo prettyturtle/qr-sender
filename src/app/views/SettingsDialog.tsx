@@ -24,6 +24,7 @@ import { clearAppCacheAndReload } from '../../platform/appCache.js';
 import { formatBytes } from '../estimate.js';
 import { LOCALES, localeInfo, useT, type Locale } from '../i18n.js';
 import { useAppStore } from '../store.js';
+import { Modal } from './Modal.js';
 
 export interface SettingsDialogProps {
   open: boolean;
@@ -43,20 +44,11 @@ export function SettingsDialog({ open, onClose, onOpenEntry }: SettingsDialogPro
   const [used, setUsed] = useState(0);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [resetting, setResetting] = useState(false);
-  // Callback ref rather than `useRef`: the mount has to trigger the effect that
-  // calls `showModal`, and a ref object does not re-render when it is filled.
-  const [dialogEl, setDialogEl] = useState<HTMLDialogElement | null>(null);
 
   const refresh = useCallback(async (): Promise<void> => {
     setEntries(await listHistory());
     setUsed(await historyBytes());
   }, []);
-
-  useEffect(() => {
-    if (dialogEl === null) return;
-    if (open && !dialogEl.open) dialogEl.showModal();
-    if (!open && dialogEl.open) dialogEl.close();
-  }, [open, dialogEl]);
 
   useEffect(() => {
     if (!open) return;
@@ -99,16 +91,7 @@ export function SettingsDialog({ open, onClose, onOpenEntry }: SettingsDialogPro
   });
 
   return (
-    <dialog
-      ref={setDialogEl}
-      className="settings-dialog"
-      onClose={onClose}
-      onClick={(event) => {
-        // A click on the backdrop lands on the dialog element itself.
-        if (event.target === dialogEl) onClose();
-      }}
-    >
-      <h2>{t('settings.title')}</h2>
+    <Modal open={open} onClose={onClose} title={t('settings.title')} className="settings-dialog">
 
       <section className="settings-section">
         <label htmlFor="settings-lang">{t('app.language')}</label>
@@ -213,12 +196,6 @@ export function SettingsDialog({ open, onClose, onOpenEntry }: SettingsDialogPro
           {resetting ? t('settings.refreshing') : t('settings.refresh')}
         </button>
       </section>
-
-      <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
-        <button type="button" className="btn" onClick={onClose}>
-          {t('common.close')}
-        </button>
-      </div>
-    </dialog>
+    </Modal>
   );
 }

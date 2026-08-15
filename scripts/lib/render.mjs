@@ -1,15 +1,27 @@
 /**
  * Shared rasteriser for the generated app artwork (icons + iOS launch images).
  *
- * Hand-written rather than pulled from a rasteriser dependency: the glyph is a
- * grid of squares, which is a dozen lines of fillRect-equivalent, and it keeps
- * the build free of native modules.
+ * Hand-written rather than pulled from a rasteriser dependency: the mark is a
+ * handful of rounded rectangles and circles, which is cheaper to express as
+ * signed distance fields than to take on a native build dependency for.
+ *
+ * Shapes are antialiased analytically — coverage comes from the distance to the
+ * edge rather than from supersampling. That matters more than it sounds: a home
+ * screen icon is authored at 512px and displayed at 48–60px, and hard-edged art
+ * downscaled that far turns to gravel. Curves have to be genuinely smooth at the
+ * source size to survive the trip.
  */
 
 import { deflateSync } from 'node:zlib';
 
+/** Splash background: the app's dark surface, so launch does not flash. */
 export const BG = [0x0e, 0x0e, 0x11];
+/** Brand blue, used for the mark wherever it sits on the dark background. */
 export const FG = [0x5b, 0x8c, 0xff];
+
+/** Icon background gradient, top-left to bottom-right. */
+const GRAD_FROM = [0x4c, 0x8d, 0xff];
+const GRAD_TO = [0x6c, 0x3c, 0xe9];
 
 const CRC_TABLE = new Uint32Array(256);
 for (let i = 0; i < 256; i++) {
@@ -66,33 +78,99 @@ export function encodePng(rgba, width, height, level = 9) {
   return out;
 }
 
-/**
- * 11x11 glyph: three finder patterns plus a scatter of data modules — reads as
- * "QR" at 48px without being a scannable code.
- */
-export const GRID = 11;
-export function glyph() {
-  const g = Array.from({ length: GRID }, () => new Array(GRID).fill(0));
-  const finder = (ox, oy) => {
-    for (let y = 0; y < 5; y++) {
-      for (let x = 0; x < 5; x++) {
-        const edge = x === 0 || y === 0 || x === 4 || y === 4;
-        const core = x >= 2 && x <= 2 && y >= 2 && y <= 2;
-        g[oy + y][ox + x] = edge || core ? 1 : 0;
-      }
-    }
-  };
-  finder(0, 0);
-  finder(GRID - 5, 0);
-  finder(0, GRID - 5);
-  for (const [x, y] of [
-    [7, 7], [9, 7], [7, 9], [10, 10], [8, 8], [6, 10], [10, 6],
-    [6, 6], [9, 10], [10, 8],
-  ]) {
-    g[y][x] = 1;
-  }
-  return g;
+/* ─── signed distance fields ─────────────────────────────────────────────── */
+
+function sdRoundedRect(px, py, cx, cy, halfW, halfH, r) {
+  const dx = Math.abs(px - cx) - (halfW - r);
+  const dy = Math.abs(py - cy) - (halfH - r);
+  const outside = Math.hypot(Math.max(dx, 0), Math.max(dy, 0));
+  const inside = Math.min(Math.max(dx, dy), 0);
+  return outside + inside - r;
 }
+
+function sdCircle(px, py, cx, cy, r) {
+  return Math.hypot(px - cx, py - cy) - r;
+}
+
+/**
+ * Distance to a shape's edge, converted to how much of the pixel it covers.
+ *
+ * `distance` arrives in mark units, so it has to be scaled into pixels before
+ * the half-pixel ramp means anything. Skipping that spreads the antialiasing
+ * over a whole unit — about 18px on a 192px icon — and the mark comes out
+ * looking like it is behind frosted glass.
+ */
+function coverage(distance, unit) {
+  return Math.min(1, Math.max(0, 0.5 - distance * unit));
+}
+
+/* ─── the mark ───────────────────────────────────────────────────────────── */
+
+/**
+ * The mark, laid out on a 7-unit square.
+ *
+ * Three rounded finder eyes and a diagonal trail of shrinking dots where a real
+ * QR's fourth corner would be. The eyes are what make it read as a QR code at a
+ * glance — they are the single most recognisable thing about one — and the trail
+ * is the sending. The old mark scattered eleven rows of small squares, which is
+ * legible on a spec sheet and mush at 48px.
+ *
+ * Returned as primitives rather than drawn directly so the same geometry backs
+ * both the rasteriser and the SVG.
+ */
+export function markShapes() {
+  const shapes = [];
+
+  // Standard finder proportions, thickened for small sizes: a ring the width of
+  // a hairline reads as grey rather than as a shape once the icon is downscaled.
+  const EYE = 3;
+  const RING = 0.56;
+  const GAP = 0.34;
+  for (const [ox, oy] of [
+    [0, 0],
+    [4, 0],
+    [0, 4],
+  ]) {
+    const cx = ox + EYE / 2;
+    const cy = oy + EYE / 2;
+    shapes.push({ kind: 'ring', cx, cy, half: EYE / 2, r: 0.62, thickness: RING });
+    const pupil = EYE / 2 - RING - GAP;
+    shapes.push({ kind: 'rect', cx, cy, half: pupil, r: 0.26 });
+  }
+
+  // Data leaving the code. Shrinking rather than uniform, so it reads as motion
+  // in one direction instead of as three unrelated dots.
+  shapes.push({ kind: 'dot', cx: 4.62, cy: 4.62, r: 0.95 });
+  shapes.push({ kind: 'dot', cx: 5.92, cy: 5.92, r: 0.6 });
+  shapes.push({ kind: 'dot', cx: 6.72, cy: 6.72, r: 0.3 });
+
+  return shapes;
+}
+
+export const MARK_UNITS = 7;
+
+/** Coverage of the mark at a point given in mark units. */
+function markCoverage(ux, uy, shapes, unit) {
+  let covered = 0;
+  for (const s of shapes) {
+    let d;
+    if (s.kind === 'dot') {
+      d = sdCircle(ux, uy, s.cx, s.cy, s.r);
+    } else if (s.kind === 'rect') {
+      d = sdRoundedRect(ux, uy, s.cx, s.cy, s.half, s.half, s.r);
+    } else {
+      const outer = sdRoundedRect(ux, uy, s.cx, s.cy, s.half, s.half, s.r);
+      const innerHalf = s.half - s.thickness;
+      const inner = sdRoundedRect(ux, uy, s.cx, s.cy, innerHalf, innerHalf, Math.max(0.02, s.r - s.thickness));
+      d = Math.max(outer, -inner);
+    }
+    covered = Math.max(covered, coverage(d, unit));
+    if (covered >= 1) return 1;
+  }
+  return covered;
+}
+
+/* ─── painting ───────────────────────────────────────────────────────────── */
 
 /** Fills an RGBA buffer with the opaque background colour. */
 export function fillBackground(rgba) {
@@ -104,31 +182,86 @@ export function fillBackground(rgba) {
   }
 }
 
-/**
- * Draws the glyph into `rgba` as a square of `art` px centred on (cx, cy).
- */
-export function drawGlyph(rgba, width, { art, cx, cy }) {
-  const g = glyph();
-  const cell = art / GRID;
-  const offX = cx - art / 2;
-  const offY = cy - art / 2;
-  const gap = Math.max(1, Math.round(cell * 0.1));
+/** Fills with the icon's diagonal gradient. */
+export function fillGradient(rgba, width, height) {
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const t = (x / width + y / height) / 2;
+      const i = (y * width + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        rgba[i + c] = Math.round(GRAD_FROM[c] + (GRAD_TO[c] - GRAD_FROM[c]) * t);
+      }
+      rgba[i + 3] = 0xff;
+    }
+  }
+}
 
-  for (let gy = 0; gy < GRID; gy++) {
-    for (let gx = 0; gx < GRID; gx++) {
-      if (!g[gy][gx]) continue;
-      const x0 = Math.round(offX + gx * cell);
-      const y0 = Math.round(offY + gy * cell);
-      const x1 = Math.round(offX + (gx + 1) * cell) - gap;
-      const y1 = Math.round(offY + (gy + 1) * cell) - gap;
-      for (let y = y0; y < y1; y++) {
-        for (let x = x0; x < x1; x++) {
-          const i = (y * width + x) * 4;
-          rgba[i] = FG[0];
-          rgba[i + 1] = FG[1];
-          rgba[i + 2] = FG[2];
-        }
+/**
+ * Draws the mark into `rgba` as a square of `art` px centred on (cx, cy).
+ *
+ * Composites rather than overwrites, so the antialiased edge blends into
+ * whatever background is already there instead of leaving a jagged silhouette.
+ */
+export function drawGlyph(rgba, width, { art, cx, cy, colour = FG }) {
+  const shapes = markShapes();
+  const unit = art / MARK_UNITS;
+  const left = cx - art / 2;
+  const top = cy - art / 2;
+
+  // Only touch the pixels the mark can reach; the launch images are mostly
+  // background and scanning all of them costs seconds.
+  const x0 = Math.max(0, Math.floor(left));
+  const y0 = Math.max(0, Math.floor(top));
+  const x1 = Math.min(width, Math.ceil(left + art));
+  const y1 = Math.min(Math.ceil(top + art), rgba.length / 4 / width);
+
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      // Sample at the pixel centre, and express the distance in mark units so
+      // the SDF radii stay resolution independent.
+      const a = markCoverage((x + 0.5 - left) / unit, (y + 0.5 - top) / unit, shapes, unit);
+      if (a <= 0) continue;
+      const i = (y * width + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        rgba[i + c] = Math.round(rgba[i + c] * (1 - a) + colour[c] * a);
       }
     }
   }
 }
+
+/** SVG body for the mark, in a `0 0 7 7` coordinate system. */
+export function markSvg(fill) {
+  const parts = markShapes().map((s) => {
+    if (s.kind === 'dot') return `<circle cx="${s.cx}" cy="${s.cy}" r="${s.r}"/>`;
+    const size = s.half * 2;
+    const x = s.cx - s.half;
+    const y = s.cy - s.half;
+    if (s.kind === 'rect') {
+      return `<rect x="${x}" y="${y}" width="${size}" height="${size}" rx="${s.r}"/>`;
+    }
+    // A ring is one path with the hole wound the other way, so `evenodd` keeps
+    // it hollow without needing a second colour painted back over the middle.
+    const ih = s.half - s.thickness;
+    const ir = Math.max(0.02, s.r - s.thickness);
+    return (
+      `<path fill-rule="evenodd" d="` +
+      roundedRectPath(x, y, size, s.r) +
+      roundedRectPath(s.cx - ih, s.cy - ih, ih * 2, ir) +
+      `"/>`
+    );
+  });
+  return `<g fill="${fill}">${parts.join('')}</g>`;
+}
+
+function roundedRectPath(x, y, size, r) {
+  const n = (v) => Number(v.toFixed(3));
+  return (
+    `M${n(x + r)} ${n(y)}h${n(size - 2 * r)}a${n(r)} ${n(r)} 0 0 1 ${n(r)} ${n(r)}` +
+    `v${n(size - 2 * r)}a${n(r)} ${n(r)} 0 0 1 ${n(-r)} ${n(r)}` +
+    `h${n(-(size - 2 * r))}a${n(r)} ${n(r)} 0 0 1 ${n(-r)} ${n(-r)}` +
+    `v${n(-(size - 2 * r))}a${n(r)} ${n(r)} 0 0 1 ${n(r)} ${n(-r)}z`
+  );
+}
+
+export const GRADIENT = { from: GRAD_FROM, to: GRAD_TO };
+export const hex = (c) => `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
