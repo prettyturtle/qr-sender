@@ -24,6 +24,10 @@ interface AppState {
 
   qrRounded: boolean;
   setQrRounded: (rounded: boolean) => void;
+
+  /** Trade payload per frame for modules big enough to see the styling. */
+  qrDesignPriority: boolean;
+  setQrDesignPriority: (on: boolean) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -43,7 +47,16 @@ export const useAppStore = create<AppState>()(
 
       qrRounded: true,
       setQrRounded: (qrRounded) => set({ qrRounded }),
+
+      qrDesignPriority: false,
+      setQrDesignPriority: (qrDesignPriority) => set({ qrDesignPriority }),
     }),
-    { name: 'qr-sender-settings', version: 2 },
+    {
+      name: 'qr-sender-settings',
+      version: 3,
+      // Without this, a bumped version discards nothing but also migrates
+      // nothing, and new fields silently arrive undefined for returning users.
+      migrate: (persisted) => persisted as never,
+    },
   ),
 );

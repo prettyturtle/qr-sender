@@ -46,6 +46,8 @@ export function estimateTransfer(
   profile: QrProfile,
   k: number = DEFAULT_K,
   playbackFps: number = DEFAULT_PLAYBACK_FPS,
+  /** Symbols shown simultaneously; each one a receiver decodes is a full block. */
+  tiles = 1,
 ): TransferEstimate {
   const segmentBytes = k * profile.blockSize;
   const segCount = Math.max(1, Math.ceil(payloadBytes / segmentBytes));
@@ -55,7 +57,7 @@ export function estimateTransfer(
   for (const r of RECEIVER_PROFILES) {
     // A receiver cannot collect distinct symbols faster than they are displayed,
     // so the playback rate is a ceiling on even the quickest decoder.
-    seconds[r.id] = symbols / (Math.min(r.decodeFps, playbackFps) * DATA_FRAME_RATIO);
+    seconds[r.id] = symbols / (Math.min(r.decodeFps, playbackFps) * DATA_FRAME_RATIO * tiles);
   }
 
   const values = RECEIVER_PROFILES.map((r) => seconds[r.id]);

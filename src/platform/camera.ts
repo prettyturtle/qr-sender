@@ -25,11 +25,14 @@ export interface ScannerStats {
 }
 
 /**
- * Default region handed to the detector. Sized for the common case: a phone
- * camera reading a large monitor, where the symbol is already plentiful in
- * pixels and decode speed is the scarce resource.
+ * Longest edge of the region handed to the detector.
+ *
+ * This used to be a centre *square* crop, which is wrong now that a sender may
+ * display several symbols side by side across a landscape screen — a square crop
+ * would simply cut the outer ones off. The frame is scaled whole instead, which
+ * costs some pixels per module but is the only way to see everything on screen.
  */
-const ROI_FAST = 800;
+const ROI_FAST = 1280;
 
 /**
  * Escalated region, used when nothing is decoding.
@@ -40,7 +43,7 @@ const ROI_FAST = 800;
  * working distance at exactly the moment it is scarcest. Desktop targets 6fps
  * and has the headroom, so when reads stop we trade speed for pixels.
  */
-const ROI_HIGH = 1440;
+const ROI_HIGH = 1920;
 
 /** How long to persist with one region size before trying the other. */
 const ROI_SWITCH_MS = 4000;
@@ -114,7 +117,9 @@ export class Scanner {
           facingMode: { ideal: 'environment' },
           width: { ideal: 1920 },
           height: { ideal: 1080 },
-          frameRate: { ideal: 30 },
+          // 60 where the hardware offers it: the two-camera-frame hold is what
+          // caps playback speed, so a faster camera directly raises the ceiling.
+          frameRate: { ideal: 60 },
         },
         audio: false,
       });
@@ -199,28 +204,21 @@ export class Scanner {
     return this.highRoi ? ROI_HIGH : ROI_FAST;
   }
 
-  /** Centre square of the viewfinder, downscaled — the detector never sees more than it needs. */
+  /** Whole frame, scaled down to the target longest edge with aspect preserved. */
   private drawCrop(): HTMLCanvasElement {
     const video = this.opts.video;
     const target = this.targetRoi();
-    const side = Math.min(video.videoWidth, video.videoHeight);
-    const out = Math.min(target, side);
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const factor = Math.min(1, target / Math.max(vw, vh));
+    const w = Math.max(1, Math.round(vw * factor));
+    const h = Math.max(1, Math.round(vh * factor));
 
-    if (this.work.width !== out || this.work.height !== out) {
-      this.work.width = out;
-      this.work.height = out;
+    if (this.work.width !== w || this.work.height !== h) {
+      this.work.width = w;
+      this.work.height = h;
     }
-    this.ctx!.drawImage(
-      video,
-      (video.videoWidth - side) / 2,
-      (video.videoHeight - side) / 2,
-      side,
-      side,
-      0,
-      0,
-      out,
-      out,
-    );
+    this.ctx!.drawImage(video, 0, 0, vw, vh, 0, 0, w, h);
     return this.work;
   }
 

@@ -12,6 +12,7 @@ import QRCode from 'qrcode';
 import { encode } from '../base44.js';
 import {
   DEFAULT_N,
+  DESIGN_MAX_VERSION,
   PROFILE_LADDER,
   QR_PROFILES,
   chooseProfile,
@@ -37,6 +38,13 @@ beforeAll(async () => {
 }, 120_000);
 
 describe('adaptive QR profile', () => {
+  it('caps the version when the user asks for design over density', () => {
+    expect(chooseProfile(688, 2).version).toBe(40);
+    expect(chooseProfile(688, 2, DESIGN_MAX_VERSION).version).toBe(25);
+    // A phone is already below the cap, so nothing changes there.
+    expect(chooseProfile(318, 3, DESIGN_MAX_VERSION).version).toBe(25);
+  });
+
   it('keeps a portrait phone on the profile that already works', () => {
     // ~318 CSS px is what the stage gets on a 390px viewport.
     expect(chooseProfile(318, 3).version).toBe(25);
@@ -141,17 +149,32 @@ describe('styled symbols still decode', () => {
     return results.length > 0 ? results[0].text : null;
   }
 
-  it('rounded corners survive a real decoder at every profile', async () => {
+  it('fully rounded modules and styled finder patterns survive a real decoder', async () => {
+    // 0.5 turns an isolated module into a circle, and the eyes become a rounded
+    // ring with a round pupil — the whole point of the styled look. If detection
+    // were going to break on either, it breaks here.
     for (const p of PROFILE_LADDER) {
       const text = encode(randomBytes(p.frameBytes, p.version));
       const sym = QRCode.create([{ data: text, mode: 'alphanumeric' }], {
         version: p.version,
         errorCorrectionLevel: p.ecc,
       });
-      const { png } = rasteriseQrRounded(sym.modules.data as unknown as Uint8Array, sym.modules.size, 6, 0.3);
-      expect(await readBack(png), `V${p.version} rounded`).toBe(text);
+      const { png } = rasteriseQrRounded(sym.modules.data as unknown as Uint8Array, sym.modules.size, 6, 0.5);
+      expect(await readBack(png), `V${p.version} styled`).toBe(text);
     }
   }, 60_000);
+
+  it('styling survives at the smallest module size the renderer allows', async () => {
+    // The renderer only rounds at three device pixels per module or more.
+    const p = QR_PROFILES.V40_L;
+    const text = encode(randomBytes(p.frameBytes, 11));
+    const sym = QRCode.create([{ data: text, mode: 'alphanumeric' }], {
+      version: p.version,
+      errorCorrectionLevel: p.ecc,
+    });
+    const { png } = rasteriseQrRounded(sym.modules.data as unknown as Uint8Array, sym.modules.size, 3, 0.5);
+    expect(await readBack(png), 'V40 styled at 3px/module').toBe(text);
+  }, 30_000);
 
   it('decodes at the luminance of the darkest-permitted palette colour', async () => {
     // Map the worst-case colour to its equivalent grey so the raster carries the
@@ -172,7 +195,7 @@ describe('styled symbols still decode', () => {
       sym.modules.data as unknown as Uint8Array,
       sym.modules.size,
       6,
-      0.3,
+      0.5,
       4,
       grey,
     );

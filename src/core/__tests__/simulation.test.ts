@@ -15,7 +15,15 @@
 
 import { describe, expect, it } from 'vitest';
 import { buildPayload } from '../payload.js';
-import { DEFAULT_K, DEFAULT_N, MIN_CAPTURE_RATE } from '../params.js';
+import {
+  DEFAULT_K,
+  DEFAULT_N,
+  DEFAULT_PLAYBACK_FPS,
+  MIN_CAPTURE_RATE,
+  PLAYBACK_FPS_OPTIONS,
+  SLOWEST_DECODE_FPS,
+  maxKForFps,
+} from '../params.js';
 import { randomBytes, runChannel } from './harness.js';
 
 const BLOCK = 512; // keeps byte arithmetic cheap; schedule dynamics are unaffected
@@ -34,12 +42,16 @@ async function payloadWith(segCount: number) {
 }
 
 describe('SP-B — parameter sweep', () => {
-  it('K/N satisfies the single-pass constraint for the worst supported receiver', () => {
-    // r_min * N >= K is what makes every receiver, fast or slow, finish in one pass.
+  it('K/N satisfies the single-pass constraint at every offered playback rate', () => {
+    // r_min * N >= K is what makes every receiver, fast or slow, finish in one
+    // pass. Capture rate falls as playback speeds up, so K has to follow it down.
+    for (const fps of PLAYBACK_FPS_OPTIONS) {
+      const k = maxKForFps(fps);
+      expect((SLOWEST_DECODE_FPS / fps) * DEFAULT_N, `fps=${fps}`).toBeGreaterThanOrEqual(k);
+    }
+    // The default K is derived from the default rate, not written down separately.
+    expect(DEFAULT_K).toBe(maxKForFps(DEFAULT_PLAYBACK_FPS));
     expect(MIN_CAPTURE_RATE * DEFAULT_N).toBeGreaterThanOrEqual(DEFAULT_K);
-    // Report the margin so a future K bump is an explicit decision.
-    const maxK = Math.floor(MIN_CAPTURE_RATE * DEFAULT_N);
-    expect(DEFAULT_K).toBeLessThanOrEqual(maxK);
   });
 
   it('sweeps capture rate x loss x join offset', async () => {
@@ -81,10 +93,14 @@ describe('SP-B — parameter sweep', () => {
     const segCount = 12;
     const { payload, manifest, streamId } = await payloadWith(segCount);
 
-    const theoretical = DEFAULT_K / DEFAULT_N; // 0.376
+    // The floor is K/N, and K moves with the default playback rate — so the
+    // sample points are derived from it rather than written down, which is what
+    // caught this test the last time the rate changed.
+    const theoretical = DEFAULT_K / DEFAULT_N;
     const results: Array<{ r: number; displayedPerPass: number; ok: boolean }> = [];
+    const samples = [theoretical * 1.2, theoretical * 1.05, theoretical, theoretical * 0.9, theoretical * 0.8];
 
-    for (const captureRate of [0.45, 0.4, 0.376, 0.35, 0.3]) {
+    for (const captureRate of samples) {
       const res = runChannel(payload, manifest, streamId, {
         captureRate,
         seed: 31337,
@@ -107,10 +123,12 @@ describe('SP-B — parameter sweep', () => {
     );
 
     // Above the floor: one pass. Below it: degrades gracefully, never fails.
-    const above = results.find((x) => x.r === 0.45)!;
-    const below = results.find((x) => x.r === 0.3)!;
-    expect(above.displayedPerPass).toBeLessThanOrEqual(1.05);
-    expect(below.displayedPerPass).toBeGreaterThan(1.05);
+    const above = results[0];
+    const below = results[results.length - 1];
+    expect(above.displayedPerPass, 'above the floor should need a single pass').toBeLessThanOrEqual(1.05);
+    expect(below.displayedPerPass, 'below the floor should need more').toBeGreaterThan(
+      above.displayedPerPass,
+    );
     expect(below.ok).toBe(true);
   });
 

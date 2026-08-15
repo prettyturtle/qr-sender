@@ -88,7 +88,8 @@ async function createZxingDetector(): Promise<FrameDetector> {
         tryHarder: false,
         tryRotate: false,
         tryInvert: false,
-        maxNumberOfSymbols: 4,
+        // A sender may tile up to six symbols across a wide screen.
+        maxNumberOfSymbols: 8,
       });
       return results.map((r) => r.text);
     },

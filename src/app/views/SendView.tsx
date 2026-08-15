@@ -19,10 +19,11 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEven
 import QRCode from 'qrcode';
 import {
   DEFAULT_N,
+  DESIGN_MAX_VERSION,
+  chooseLayout,
+  type StageLayout,
   PLAYBACK_FPS_OPTIONS,
-  chooseProfile,
   maxKForFps,
-  type QrProfile,
 } from '../../core/params.js';
 import { buildPayload } from '../../core/payload.js';
 import { resolveMime } from '../../core/mime.js';
@@ -55,17 +56,21 @@ type Source = { kind: 'file'; file: File } | { kind: 'text'; text: string };
 type Phase =
   | { kind: 'idle' }
   | { kind: 'preparing' }
-  /** The profile is fixed for the life of a stream: `blockSize` is in every header. */
-  | { kind: 'playing'; emitter: Emitter; profile: QrProfile };
+  /** The layout is fixed for the life of a stream: `blockSize` is in every header. */
+  | { kind: 'playing'; emitter: Emitter; layout: StageLayout };
 
 /**
  * Width the stage will get, computed before it exists so the QR version can be
  * chosen up front. Mirrors the shell's max-width and padding plus the stage's
  * own padding.
  */
-function stageWidthEstimate(): number {
-  const viewport = globalThis.innerWidth ?? 400;
-  return Math.max(MIN_STAGE_CSS_SIZE, Math.min(760, viewport) - 32 - 40);
+function stageAreaEstimate(): { width: number; height: number } {
+  // The playing stage breaks out of the shell's max-width, so the whole viewport
+  // is available. A square symbol on a landscape screen wastes the horizontal
+  // half of it, which is what makes tiling worth the complexity.
+  const width = Math.max(MIN_STAGE_CSS_SIZE, (globalThis.innerWidth ?? 400) - 32);
+  const height = Math.max(MIN_STAGE_CSS_SIZE, (globalThis.innerHeight ?? 700) - STAGE_CHROME_PX);
+  return { width, height };
 }
 
 export function SendView(): JSX.Element {
@@ -77,6 +82,8 @@ export function SendView(): JSX.Element {
   const setQrColor = useAppStore((s) => s.setQrColor);
   const qrRounded = useAppStore((s) => s.qrRounded);
   const setQrRounded = useAppStore((s) => s.setQrRounded);
+  const designPriority = useAppStore((s) => s.qrDesignPriority);
+  const setDesignPriority = useAppStore((s) => s.setQrDesignPriority);
 
   const [file, setFile] = useState<File | null>(null);
   const [text, setText] = useState('');
@@ -88,24 +95,35 @@ export function SendView(): JSX.Element {
   const [fullscreen, setFullscreen] = useState(false);
   const [wakeLockSupported, setWakeLockSupported] = useState(true);
   const [stats, setStats] = useState({ frames: 0, passes: 0 });
-  const [stageWidth, setStageWidth] = useState(stageWidthEstimate);
+  const [stageArea, setStageArea] = useState(stageAreaEstimate);
 
-  // A bigger screen can carry a denser symbol at the same physical module size,
-  // and payload per frame is the largest throughput lever there is.
-  const profile = useMemo(
-    () => chooseProfile(stageWidth, globalThis.devicePixelRatio || 1),
-    [stageWidth],
+  // Payload per tick is the throughput lever: a denser symbol where the screen
+  // can resolve it, and more than one symbol where the screen has room.
+  const layout = useMemo(
+    () =>
+      chooseLayout(
+        stageArea.width,
+        stageArea.height,
+        globalThis.devicePixelRatio || 1,
+        designPriority ? DESIGN_MAX_VERSION : undefined,
+        designPriority ? 1 : undefined,
+      ),
+    [stageArea, designPriority],
   );
 
   useEffect(() => {
-    const onResize = (): void => setStageWidth(stageWidthEstimate());
+    const onResize = (): void => setStageArea(stageAreaEstimate());
     window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    globalThis.screen?.orientation?.addEventListener('change', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      globalThis.screen?.orientation?.removeEventListener('change', onResize);
+    };
   }, []);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
-  const mainCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const tileRefs = useRef<Array<HTMLCanvasElement | null>>([]);
   const sideCanvasRef = useRef<HTMLCanvasElement | null>(null);
   /** Read by the rAF loop so a resize never restarts playback. */
   const stageSizeRef = useRef(MIN_STAGE_CSS_SIZE);
@@ -136,8 +154,11 @@ export function SendView(): JSX.Element {
   }, [source]);
 
   const estimate = useMemo(
-    () => (sourceBytes > 0 ? estimateTransfer(sourceBytes, profile, maxKForFps(fps), fps) : null),
-    [sourceBytes, profile, fps],
+    () =>
+      sourceBytes > 0
+        ? estimateTransfer(sourceBytes, layout.profile, maxKForFps(fps), fps, layout.cols * layout.rows)
+        : null,
+    [sourceBytes, layout, fps],
   );
 
   const receiveUrl = useMemo(() => {
@@ -152,18 +173,18 @@ export function SendView(): JSX.Element {
   useEffect(() => {
     if (phase.kind !== 'playing') return;
     const emitter = phase.emitter;
+    const tiles = emitter.isStatic ? 1 : phase.layout.cols * phase.layout.rows;
+    const style = { dark: qrColor, rounded: qrRounded };
+
+    const nextFrame = (): RenderedQr => buildQr(base44Encode(emitter.next()), phase.layout.profile);
 
     // A transfer that fits in one frame has nothing to animate. Draw it once and
     // leave it on screen — no timer, no repaint, and any scanner gets it in a
     // single glance.
     if (emitter.isStatic) {
-      const canvas = mainCanvasRef.current;
-      if (canvas !== null) {
-        drawQr(canvas, buildQr(base44Encode(emitter.next()), phase.profile), {
-          cssSize: stageSizeRef.current,
-          dark: qrColor,
-          rounded: qrRounded,
-        });
+      const canvas = tileRefs.current[0];
+      if (canvas !== null && canvas !== undefined) {
+        drawQr(canvas, nextFrame(), { cssSize: stageSizeRef.current, ...style });
       }
       return;
     }
@@ -172,22 +193,21 @@ export function SendView(): JSX.Element {
 
     let raf = 0;
     let last = -1;
-    let pending: RenderedQr | null = null;
+    let pending: RenderedQr[] | null = null;
 
-    const nextFrame = (): RenderedQr => buildQr(base44Encode(emitter.next()), phase.profile);
+    const buildBatch = (): RenderedQr[] => Array.from({ length: tiles }, nextFrame);
 
     const show = (): void => {
-      const canvas = mainCanvasRef.current;
-      if (canvas === null) return;
-      drawQr(canvas, pending ?? nextFrame(), {
-        cssSize: stageSizeRef.current,
-        dark: qrColor,
-        rounded: qrRounded,
-      });
-      // One-frame lookahead: build the *next* symbol right after painting so the
+      const batch = pending ?? buildBatch();
+      for (let i = 0; i < tiles; i++) {
+        const canvas = tileRefs.current[i];
+        if (canvas === null || canvas === undefined) continue;
+        drawQr(canvas, batch[i], { cssSize: stageSizeRef.current, ...style });
+      }
+      // One-tick lookahead: build the *next* batch right after painting so the
       // encode cost lands in the idle tail of the period instead of between the
       // deadline and the paint, where it would show up as playback jitter.
-      pending = nextFrame();
+      pending = buildBatch();
     };
 
     const tick = (now: number): void => {
@@ -224,34 +244,18 @@ export function SendView(): JSX.Element {
 
   /* ─── canvas sizing ───────────────────────────────────────────────────── */
 
+  // Derived from the viewport, not measured from the stage: the stage's height
+  // comes from the canvas it contains, so measuring it to size that canvas is
+  // circular and yields a near-zero first reading.
   useEffect(() => {
     if (phase.kind !== 'playing') return;
-    const el = stageRef.current;
-    if (el === null) return;
-
-    const emitter = phase.emitter;
-    const measure = (): void => {
-      const width = el.clientWidth - 40;
-      // Only fullscreen constrains height; in flow the stage grows to fit.
-      const limit = fullscreen ? Math.min(width, el.clientHeight - STAGE_CHROME_PX) : width;
-      stageSizeRef.current = Math.max(MIN_STAGE_CSS_SIZE, Math.floor(limit));
-      // The animated path repaints on its own each tick; a still frame has to be
-      // redrawn here or a resize would leave it at the old scale.
-      const canvas = mainCanvasRef.current;
-      if (emitter.isStatic && canvas !== null) {
-        drawQr(canvas, buildQr(base44Encode(emitter.next()), phase.profile), {
-          cssSize: stageSizeRef.current,
-          dark: qrColor,
-          rounded: qrRounded,
-        });
-      }
-    };
-
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [phase, fullscreen, qrColor, qrRounded]);
+    const { cols, rows, tileSize } = phase.layout;
+    const gap = 8 * (Math.max(cols, rows) - 1);
+    const width = (stageArea.width - 24 - gap) / cols;
+    const height = (stageArea.height - 24 - gap) / rows;
+    const fitted = Math.floor(Math.min(width, height, tileSize));
+    stageSizeRef.current = Math.max(MIN_STAGE_CSS_SIZE, fitted);
+  }, [phase, stageArea, fullscreen]);
 
   /* ─── static onboarding QR ────────────────────────────────────────────── */
 
@@ -374,13 +378,13 @@ export function SendView(): JSX.Element {
         // receiver's share of each carousel cycle.
         k: maxKForFps(fps),
         n: DEFAULT_N,
-        blockSize: profile.blockSize,
+        blockSize: layout.profile.blockSize,
       });
       if (stale()) return;
 
       setPhase({
         kind: 'playing',
-        profile,
+        layout,
         emitter: new Emitter({
           payload: built.payload,
           manifest: built.manifest,
@@ -420,10 +424,26 @@ export function SendView(): JSX.Element {
 
   if (phase.kind === 'playing') {
     const emitter = phase.emitter;
+    const tileCount = emitter.isStatic ? 1 : phase.layout.cols * phase.layout.rows;
+    const tileCols = emitter.isStatic ? 1 : phase.layout.cols;
     return (
       <>
-        <div className={fullscreen ? 'qr-stage fullscreen' : 'qr-stage'} ref={stageRef}>
-          <canvas ref={mainCanvasRef} aria-label={t('app.send')} role="img" />
+        <div className={fullscreen ? 'qr-stage bleed fullscreen' : 'qr-stage bleed'} ref={stageRef}>
+          <div
+            className="tile-grid"
+            style={{ gridTemplateColumns: `repeat(${tileCols}, max-content)` }}
+            aria-label={t('app.send')}
+            role="img"
+          >
+            {Array.from({ length: tileCount }, (_, i) => (
+              <canvas
+                key={i}
+                ref={(el) => {
+                  tileRefs.current[i] = el;
+                }}
+              />
+            ))}
+          </div>
 
           <div className="qr-side">
             <canvas ref={sideCanvasRef} aria-hidden="true" />
@@ -637,6 +657,15 @@ export function SendView(): JSX.Element {
             onChange={(event) => setQrRounded(event.target.checked)}
           />
           <span>{t('send.qrRounded')}</span>
+        </label>
+
+        <label className="switch" style={{ marginTop: 10 }}>
+          <input
+            type="checkbox"
+            checked={designPriority}
+            onChange={(event) => setDesignPriority(event.target.checked)}
+          />
+          <span>{t('send.qrDesign')}</span>
         </label>
 
         <p className="mono" style={{ marginTop: 10, marginBottom: 0 }}>

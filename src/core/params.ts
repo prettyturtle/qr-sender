@@ -15,7 +15,7 @@ export const MAGIC_1 = 0x53; // 'S'
 export const HEADER_SIZE = 24;
 
 /** Declared early: the capture-rate constants below are derived from it. */
-const DEFAULT_PLAYBACK_FPS_VALUE = 10;
+const DEFAULT_PLAYBACK_FPS_VALUE = 15;
 
 export type QrEcc = 'L' | 'M' | 'Q' | 'H';
 
@@ -60,6 +60,9 @@ export const DEFAULT_PROFILE = QR_PROFILES.V25_L;
 
 export const QUIET_ZONE_MODULES = 4;
 
+/** Version ceiling that keeps modules large enough for the rounded style to read. */
+export const DESIGN_MAX_VERSION = 25;
+
 /**
  * CSS pixels per module the shipping configuration actually achieves: a phone in
  * portrait gives the stage about 318 CSS px, and V25 at 125 total modules works
@@ -86,9 +89,92 @@ const MIN_DEVICE_PX_PER_MODULE = 3;
  * proxy. Guessing high degrades decode rate but never correctness: the carousel
  * simply takes longer.
  */
-export function chooseProfile(stageCssSize: number, devicePixelRatio = 1): QrProfile {
+export interface StageLayout {
+  cols: number;
+  rows: number;
+  profile: QrProfile;
+  /** Edge length in CSS pixels of one tile. */
+  tileSize: number;
+  /** Payload bytes displayed per tick. */
+  bytesPerTick: number;
+}
+
+/** Arrangements worth considering, smallest first. */
+const LAYOUTS: ReadonlyArray<[number, number]> = [
+  [1, 1],
+  [2, 1],
+  [1, 2],
+  [2, 2],
+  [3, 1],
+  [3, 2],
+];
+
+/**
+ * Choose how many symbols to display at once, and at what version.
+ *
+ * A QR symbol is square but a screen is not. On a 16:9 display a single symbol
+ * is limited by the *height* and leaves roughly forty percent of the width
+ * unused — so two symbols side by side cost only about a tenth of the module
+ * size while doubling the payload per tick. Every frame is self-describing, so
+ * the receiver needs no notion of tiling: it just decodes whatever it sees.
+ *
+ * The search maximises bytes per tick subject to the same module-size floors a
+ * single symbol has to clear, which is what keeps this from quietly trading
+ * decodability for throughput.
+ */
+export function chooseLayout(
+  stageWidth: number,
+  stageHeight: number,
+  devicePixelRatio = 1,
+  maxVersion = 40,
+  maxTiles = 4,
+): StageLayout {
+  let best: StageLayout | null = null;
+
+  for (const [cols, rows] of LAYOUTS) {
+    if (cols * rows > maxTiles) continue;
+    // Tiles are square and equal, so the limiting dimension sets the size.
+    const gap = 8 * (Math.max(cols, rows) - 1);
+    const tileSize = Math.floor(Math.min((stageWidth - gap) / cols, (stageHeight - gap) / rows));
+    if (tileSize < 120) continue;
+
+    const profile = chooseProfile(tileSize, devicePixelRatio, maxVersion);
+    // A layout only counts if its tiles clear the floors on their own merits.
+    const total = profile.modules + QUIET_ZONE_MODULES * 2;
+    if (tileSize / total < MIN_CSS_PX_PER_MODULE) continue;
+    if (Math.floor((tileSize * devicePixelRatio) / total) < MIN_DEVICE_PX_PER_MODULE) continue;
+
+    const bytesPerTick = cols * rows * profile.blockSize;
+    if (best === null || bytesPerTick > best.bytesPerTick) {
+      best = { cols, rows, profile, tileSize, bytesPerTick };
+    }
+  }
+
+  if (best !== null) return best;
+  const profile = chooseProfile(Math.min(stageWidth, stageHeight), devicePixelRatio, maxVersion);
+  return {
+    cols: 1,
+    rows: 1,
+    profile,
+    tileSize: Math.min(stageWidth, stageHeight),
+    bytesPerTick: profile.blockSize,
+  };
+}
+
+export function chooseProfile(
+  stageCssSize: number,
+  devicePixelRatio = 1,
+  /**
+   * Ceiling on the symbol version. Styling and density pull against each other:
+   * at V40 a module is a few pixels across and a rounded corner is invisible, so
+   * a user who wants the symbol to *look* designed has to give back some of the
+   * payload it buys.
+   */
+  maxVersion = 40,
+): QrProfile {
   let best = PROFILE_LADDER[0];
   for (const p of PROFILE_LADDER) {
+    if (p.version > maxVersion) continue;
     const total = p.modules + QUIET_ZONE_MODULES * 2;
     const cssPerModule = stageCssSize / total;
     const devicePerModule = Math.floor((stageCssSize * devicePixelRatio) / total);
@@ -96,9 +182,6 @@ export function chooseProfile(stageCssSize: number, devicePixelRatio = 1): QrPro
   }
   return best;
 }
-
-/** Source symbols per segment. Constrained by `MIN_CAPTURE_RATE * N >= K`. */
-export const DEFAULT_K = 96;
 
 /** Total symbols per segment. GF(256) Cauchy construction requires K + R <= 256. */
 export const DEFAULT_N = 255;
@@ -124,6 +207,15 @@ export function maxKForFps(playbackFps: number): number {
   return Math.max(1, Math.floor((SLOWEST_DECODE_FPS / playbackFps) * DEFAULT_N));
 }
 
+/**
+ * Source symbols per segment at the default playback rate.
+ *
+ * Derived rather than written down: a literal here drifted out of step the
+ * moment the default frame rate changed, which would have quietly cost the
+ * slowest receiver a second carousel pass.
+ */
+export const DEFAULT_K = maxKForFps(DEFAULT_PLAYBACK_FPS_VALUE);
+
 /** Consecutive symbols emitted per segment before moving on, to amortise file reads. */
 export const BURST = 8;
 
@@ -136,11 +228,15 @@ export const MANIFEST_INTERVAL = 40;
 
 /**
  * Playback rates must divide 30 and 60 so each frame is held for at least two
- * camera frames. 15 is the arithmetic limit on a 30fps camera and leaves no
- * margin — a camera that drops to 24fps in low light violates the hold — so it
- * is offered but not the default.
+ * camera frames.
+ *
+ * 15 is the default: it is the arithmetic limit for a 30fps camera and the
+ * fastest rate that still guarantees the two-frame hold. 20 and 30 only work
+ * when the receiving camera actually runs at 60fps — they are offered because
+ * many phones do, and the failure mode is a lower decode rate rather than a
+ * corrupted transfer, but they are not safe to default to.
  */
-export const PLAYBACK_FPS_OPTIONS = [10, 12, 15] as const;
+export const PLAYBACK_FPS_OPTIONS = [10, 12, 15, 20, 30] as const;
 export const DEFAULT_PLAYBACK_FPS = DEFAULT_PLAYBACK_FPS_VALUE;
 
 /** Above this size the UI warns that the payload is outside the verified range. */

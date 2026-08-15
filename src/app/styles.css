@@ -467,6 +467,23 @@ select:focus-visible,
   image-rendering: pixelated;
 }
 
+/* The shell is capped at 760px for reading, but a QR wants every pixel the
+   screen has — that width is throughput. */
+.qr-stage.bleed {
+  width: 100vw;
+  max-width: 100vw;
+  margin-left: calc(50% - 50vw);
+  border-radius: 0;
+  padding: 12px;
+}
+
+.tile-grid {
+  display: grid;
+  gap: 8px;
+  justify-content: center;
+  align-content: center;
+}
+
 .qr-side {
   display: flex;
   align-items: center;
